@@ -1,0 +1,18 @@
+[package]
+name = "radiacode-bluetooth"
+version = "0.1.0"
+edition = "2024"
+description = "Bluetooth LE transport and protocol client for RadiaCode radiation detectors"
+license = "MIT"
+
+[dependencies]
+btleplug = "0.11"
+futures = "0.3"
+thiserror = "2"
+time = { version = "0.3", features = ["local-offset"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+uuid = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
