@@ -76,7 +76,7 @@ fn draw_transport(
     state: &SpectrogramState,
     connection: ConnectionState,
 ) -> Option<SpectrogramControlsAction> {
-    let recording = state.recording.is_some();
+    let recording = state.is_recording();
     let mut action = None;
     ui.horizontal(|ui| {
         if recording {

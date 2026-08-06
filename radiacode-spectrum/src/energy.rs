@@ -1,4 +1,4 @@
-use radiacode_bluetooth::channel_to_energy;
+use radiacode_core::channel_to_energy;
 
 use crate::model::SpectrumView;
 

@@ -1,12 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use crossbeam_channel::Sender;
 use std::sync::Arc;
 use std::time::Duration;
 
-use radiacode_bluetooth::{
-    merge_status, scan_radiacode_devices, AlarmLimits, AlarmLimitsUpdate, DeviceStatus, Error,
-    RadiaCode, SessionRestore,
+use radiacode_bluetooth::{scan_radiacode_devices, BleError};
+use radiacode_core::{
+    merge_discovered, merge_status, AlarmLimits, AlarmLimitsUpdate, DeviceEndpoint, DeviceStatus,
+    DiscoveredDevice, Error, RadiaCode, SessionRestore, Spectrum,
 };
+use radiacode_usb::scan_usb_devices;
 use tracing::{debug, error, info, warn};
 
 use crate::model::{DeviceInfo, SpectrumView};
@@ -29,48 +31,68 @@ impl SessionEpoch {
 }
 
 pub async fn handle_scan(events: &Sender<WorkerEvent>) {
-    info!("scanning for radiacode devices");
-    match scan_radiacode_devices(Duration::from_secs(5)).await {
-        Ok(devices) => {
-            info!(count = devices.len(), "scan finished");
-            let _ = events.send(WorkerEvent::ScanFinished(devices));
-        }
-        Err(error) => {
-            error!(%error, "scan failed");
-            let _ = events.send(WorkerEvent::Error(error.to_string()));
-        }
+    info!("scanning for radiacode devices over usb and bluetooth");
+    let (usb_devices, ble_devices) = tokio::join!(scan_usb_async(), scan_bluetooth_async());
+    let usb_devices = usb_devices.unwrap_or_else(|error| {
+        warn!(%error, "usb scan failed");
+        Vec::new()
+    });
+    let ble_devices = ble_devices.unwrap_or_else(|error| {
+        warn!(%error, "bluetooth scan failed");
+        Vec::new()
+    });
+    if usb_devices.is_empty() && ble_devices.is_empty() {
+        let _ = events.send(WorkerEvent::ScanFinished(Vec::new()));
+        return;
     }
+    let devices = merge_discovered(usb_devices, ble_devices);
+    info!(count = devices.len(), "scan finished");
+    let _ = events.send(WorkerEvent::ScanFinished(devices));
+}
+
+async fn scan_usb_async() -> Result<Vec<DiscoveredDevice>, String> {
+    tokio::task::spawn_blocking(scan_usb_devices)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+async fn scan_bluetooth_async() -> Result<Vec<DiscoveredDevice>, String> {
+    scan_radiacode_devices(Duration::from_secs(5))
+        .await
+        .map_err(|error: BleError| error.to_string())
 }
 
 pub async fn handle_connect(
     events: &Sender<WorkerEvent>,
     previous: Option<RadiaCode>,
-    mac: &str,
+    endpoint: &DeviceEndpoint,
+    hint_rssi: Option<i16>,
     session: &SessionEpoch,
     link_status: &mut DeviceStatus,
     session_restore: &mut Option<SessionRestore>,
 ) -> Option<RadiaCode> {
-    info!(%mac, "connecting");
+    info!(?endpoint, "connecting");
     if let Some(previous) = previous {
-        debug!(%mac, "disconnecting previous session before connect");
+        debug!(?endpoint, "disconnecting previous session before connect");
         let _ = previous.disconnect().await;
         tokio::time::sleep(CONNECT_COOLDOWN).await;
     }
     if !session.active() {
-        warn!(%mac, "connect aborted: session ended");
+        warn!(?endpoint, "connect aborted: session ended");
         return None;
     }
-    match RadiaCode::connect(mac).await {
+    match connect_endpoint(endpoint, None).await {
         Ok(mut device) => {
             if !session.active() {
-                warn!(%mac, "connect aborted after link up: session ended");
+                warn!(?endpoint, "connect aborted after link up: session ended");
                 let _ = device.disconnect().await;
                 return None;
             }
-            match load_device_info(&mut device, mac, events).await {
+            match load_device_info(&mut device, endpoint, hint_rssi, events).await {
                 Ok(info) => {
                     if !session.active() {
-                        warn!(%mac, "connect aborted after metadata load: session ended");
+                        warn!(?endpoint, "connect aborted after metadata load: session ended");
                         let _ = device.disconnect().await;
                         return None;
                     }
@@ -81,16 +103,17 @@ pub async fn handle_connect(
                     };
                     *session_restore = device.session_restore();
                     info!(
-                        %mac,
+                        ?endpoint,
                         serial = %info.serial,
                         model = %info.model,
                         "connected"
                     );
                     let _ = events.send(WorkerEvent::Connected(info));
+                    let _ = events.send(WorkerEvent::DeviceStatus(*link_status));
                     Some(device)
                 }
                 Err(error) => {
-                    error!(%mac, %error, "failed to load device info");
+                    error!(?endpoint, %error, "failed to load device info");
                     let _ = device.disconnect().await;
                     let _ = events.send(WorkerEvent::Error(error.to_string()));
                     let _ = events.send(WorkerEvent::Disconnected);
@@ -99,8 +122,14 @@ pub async fn handle_connect(
             }
         }
         Err(error) => {
-            error!(%mac, %error, "connect failed");
-            let _ = events.send(WorkerEvent::Error(error.to_string()));
+            error!(?endpoint, %error, "connect failed");
+            if error.is_usb_permission_denied() {
+                let _ = events.send(WorkerEvent::UsbPermissionRequired {
+                    endpoint: endpoint.clone(),
+                });
+            } else {
+                let _ = events.send(WorkerEvent::Error(error.to_string()));
+            }
             let _ = events.send(WorkerEvent::Disconnected);
             None
         }
@@ -109,16 +138,21 @@ pub async fn handle_connect(
 
 async fn load_device_info(
     device: &mut RadiaCode,
-    mac: &str,
+    endpoint: &DeviceEndpoint,
+    hint_rssi: Option<i16>,
     events: &Sender<WorkerEvent>,
-) -> radiacode_bluetooth::Result<DeviceInfo> {
-    debug!(%mac, "loading device metadata");
+) -> radiacode_core::Result<DeviceInfo> {
+    debug!(?endpoint, "loading device metadata");
     let metadata = device.metadata().await?;
-    let status = device.device_status().await.unwrap_or_default();
+    let refresh_rssi = matches!(endpoint, DeviceEndpoint::Bluetooth { .. });
+    let mut status = device.device_status(refresh_rssi).await.unwrap_or_default();
+    if status.rssi_dbm.is_none() && refresh_rssi {
+        status.rssi_dbm = device.sample_rssi_dbm().await.or(hint_rssi);
+    }
     if let Ok(limits) = device.alarm_limits().await {
         let _ = events.send(WorkerEvent::AlarmLimits(limits));
     }
-    Ok(DeviceInfo::from_metadata(metadata, mac, status))
+    Ok(DeviceInfo::from_metadata(metadata, endpoint, status))
 }
 
 pub async fn handle_disconnect(events: &Sender<WorkerEvent>, device: Option<RadiaCode>) {
@@ -135,7 +169,7 @@ pub async fn handle_disconnect(events: &Sender<WorkerEvent>, device: Option<Radi
 pub async fn handle_spectrum(
     events: &Sender<WorkerEvent>,
     device: Option<RadiaCode>,
-    session_mac: Option<&str>,
+    session_endpoint: Option<&DeviceEndpoint>,
     session: &SessionEpoch,
     link_status: &mut DeviceStatus,
     session_restore: &Option<SessionRestore>,
@@ -161,7 +195,7 @@ pub async fn handle_spectrum(
             handle_device_error(
                 events,
                 device,
-                session_mac,
+                session_endpoint,
                 error,
                 session,
                 link_status,
@@ -175,7 +209,7 @@ pub async fn handle_spectrum(
 pub async fn handle_reset(
     events: &Sender<WorkerEvent>,
     device: Option<RadiaCode>,
-    session_mac: Option<&str>,
+    session_endpoint: Option<&DeviceEndpoint>,
     session: &SessionEpoch,
     link_status: &mut DeviceStatus,
     session_restore: &Option<SessionRestore>,
@@ -190,7 +224,7 @@ pub async fn handle_reset(
             handle_spectrum(
                 events,
                 Some(device),
-                session_mac,
+                session_endpoint,
                 session,
                 link_status,
                 session_restore,
@@ -201,7 +235,7 @@ pub async fn handle_reset(
             handle_device_error(
                 events,
                 device,
-                session_mac,
+                session_endpoint,
                 error,
                 session,
                 link_status,
@@ -212,9 +246,7 @@ pub async fn handle_reset(
     }
 }
 
-async fn fetch_spectrum_with_retries(
-    device: &mut RadiaCode,
-) -> radiacode_bluetooth::Result<radiacode_bluetooth::Spectrum> {
+async fn fetch_spectrum_with_retries(device: &mut RadiaCode) -> radiacode_core::Result<Spectrum> {
     let mut last_error: Option<Error> = None;
     for attempt in 0..=TRANSIENT_RETRIES {
         if attempt > 0 {
@@ -236,19 +268,19 @@ async fn fetch_spectrum_with_retries(
 async fn handle_device_error(
     events: &Sender<WorkerEvent>,
     device: RadiaCode,
-    session_mac: Option<&str>,
+    session_endpoint: Option<&DeviceEndpoint>,
     error: Error,
     session: &SessionEpoch,
     link_status: &mut DeviceStatus,
     session_restore: &Option<SessionRestore>,
 ) -> Option<RadiaCode> {
-    if should_reconnect(&error, session_mac) {
-        warn!(%error, session_mac, "connection lost during device operation");
+    if should_reconnect(&error, session_endpoint) {
+        warn!(%error, ?session_endpoint, "connection lost during device operation");
         drop(device);
         if session.active() {
             return reconnect_and_restore(
                 events,
-                session_mac?,
+                session_endpoint?,
                 session,
                 link_status,
                 session_restore,
@@ -263,37 +295,44 @@ async fn handle_device_error(
     Some(device)
 }
 
-fn should_reconnect(error: &Error, session_mac: Option<&str>) -> bool {
-    session_mac.is_some() && (error.is_connection_lost() || matches!(error, Error::Timeout))
+fn should_reconnect(error: &Error, session_endpoint: Option<&DeviceEndpoint>) -> bool {
+    session_endpoint.is_some()
+        && (is_connection_lost(error) || matches!(error, Error::Timeout))
+}
+
+fn is_connection_lost(error: &Error) -> bool {
+    error.is_connection_lost()
+        || radiacode_bluetooth::is_connection_lost(error)
+        || radiacode_usb::is_connection_lost(error)
 }
 
 async fn reconnect_and_restore(
     events: &Sender<WorkerEvent>,
-    mac: &str,
+    endpoint: &DeviceEndpoint,
     session: &SessionEpoch,
     link_status: &mut DeviceStatus,
     session_restore: &Option<SessionRestore>,
 ) -> Option<RadiaCode> {
     if !session.active() {
-        warn!(%mac, "reconnect skipped: session ended");
+        warn!(?endpoint, "reconnect skipped: session ended");
         return None;
     }
     let Some(restore) = session_restore else {
-        warn!(%mac, "reconnect skipped: no cached session");
+        warn!(?endpoint, "reconnect skipped: no cached session");
         let _ = events.send(WorkerEvent::Disconnected);
         return None;
     };
-    info!(%mac, "attempting reconnect");
+    info!(?endpoint, "attempting reconnect");
     let _ = events.send(WorkerEvent::Reconnecting);
-    match reconnect(mac, session, restore).await {
+    match reconnect_endpoint(endpoint, session, restore).await {
         Ok(mut device) => {
             if !session.active() {
-                warn!(%mac, "reconnect aborted after link up: session ended");
+                warn!(?endpoint, "reconnect aborted after link up: session ended");
                 let _ = device.disconnect().await;
                 return None;
             }
             *link_status = DeviceStatus::default();
-            match load_device_info(&mut device, mac, events).await {
+            match load_device_info(&mut device, endpoint, None, events).await {
                 Ok(info) => {
                     if !session.active() {
                         let _ = device.disconnect().await;
@@ -304,7 +343,7 @@ async fn reconnect_and_restore(
                         temperature_c: info.temperature_c,
                         rssi_dbm: info.rssi_dbm,
                     };
-                    info!(%mac, serial = %info.serial, "reconnected");
+                    info!(?endpoint, serial = %info.serial, "reconnected");
                     let _ = events.send(WorkerEvent::Connected(info));
                     match fetch_spectrum_with_retries(&mut device).await {
                         Ok(spectrum) => {
@@ -316,14 +355,14 @@ async fn reconnect_and_restore(
                             Some(device)
                         }
                         Err(error) => {
-                            error!(%mac, %error, "spectrum fetch failed after reconnect");
+                            error!(?endpoint, %error, "spectrum fetch failed after reconnect");
                             let _ = events.send(WorkerEvent::Error(error.to_string()));
                             Some(device)
                         }
                     }
                 }
                 Err(error) => {
-                    error!(%mac, %error, "reconnect session restore failed");
+                    error!(?endpoint, %error, "reconnect session restore failed");
                     let _ = device.disconnect().await;
                     let _ = events.send(WorkerEvent::Error(error.to_string()));
                     let _ = events.send(WorkerEvent::Disconnected);
@@ -333,11 +372,11 @@ async fn reconnect_and_restore(
         }
         Err(error) => {
             if session.active() {
-                error!(%mac, %error, "reconnect failed");
+                error!(?endpoint, %error, "reconnect failed");
                 let _ = events.send(WorkerEvent::Error(error.to_string()));
                 let _ = events.send(WorkerEvent::Disconnected);
             } else {
-                warn!(%mac, "reconnect aborted: session ended");
+                warn!(?endpoint, "reconnect aborted: session ended");
             }
             None
         }
@@ -347,7 +386,7 @@ async fn reconnect_and_restore(
 pub async fn handle_monitor(
     events: &Sender<WorkerEvent>,
     device: Option<RadiaCode>,
-    session_mac: Option<&str>,
+    session_endpoint: Option<&DeviceEndpoint>,
     alarm_limits: &mut Option<AlarmLimits>,
     monitor_polls: &mut u64,
     session: &SessionEpoch,
@@ -364,7 +403,7 @@ pub async fn handle_monitor(
             return handle_device_error(
                 events,
                 device,
-                session_mac,
+                session_endpoint,
                 error,
                 session,
                 link_status,
@@ -373,7 +412,7 @@ pub async fn handle_monitor(
             .await
         }
     };
-    let refresh_rssi = true;
+    let refresh_rssi = false;
     match device.poll_monitor(&limits, refresh_rssi).await {
         Ok((rates, fresh)) => {
             merge_status(link_status, fresh);
@@ -394,7 +433,7 @@ pub async fn handle_monitor(
             handle_device_error(
                 events,
                 device,
-                session_mac,
+                session_endpoint,
                 error,
                 session,
                 link_status,
@@ -408,7 +447,7 @@ pub async fn handle_monitor(
 pub async fn handle_set_alarm_limits(
     events: &Sender<WorkerEvent>,
     device: Option<RadiaCode>,
-    session_mac: Option<&str>,
+    session_endpoint: Option<&DeviceEndpoint>,
     update: AlarmLimitsUpdate,
     alarm_limits: &mut Option<AlarmLimits>,
     session: &SessionEpoch,
@@ -432,7 +471,7 @@ pub async fn handle_set_alarm_limits(
                 handle_device_error(
                     events,
                     device,
-                    session_mac,
+                    session_endpoint,
                     error,
                     session,
                     link_status,
@@ -445,7 +484,7 @@ pub async fn handle_set_alarm_limits(
             handle_device_error(
                 events,
                 device,
-                session_mac,
+                session_endpoint,
                 error,
                 session,
                 link_status,
@@ -461,7 +500,7 @@ async fn ensure_alarm_limits(
     cache: &mut Option<AlarmLimits>,
     events: &Sender<WorkerEvent>,
     monitor_polls: &u64,
-) -> radiacode_bluetooth::Result<AlarmLimits> {
+) -> radiacode_core::Result<AlarmLimits> {
     let refresh = cache.is_none() || monitor_polls.is_multiple_of(ALARM_REFRESH_POLLS);
     if refresh {
         let limits = device.alarm_limits().await?;
@@ -471,13 +510,35 @@ async fn ensure_alarm_limits(
     Ok(cache.expect("alarm limits cached"))
 }
 
-async fn reconnect(
-    mac: &str,
+async fn connect_endpoint(
+    endpoint: &DeviceEndpoint,
+    restore: Option<&SessionRestore>,
+) -> radiacode_core::Result<RadiaCode> {
+    match endpoint {
+        DeviceEndpoint::Bluetooth { address } => {
+            if let Some(restore) = restore {
+                radiacode_bluetooth::reconnect_session(address, restore).await
+            } else {
+                radiacode_bluetooth::connect(address).await
+            }
+        }
+        DeviceEndpoint::Usb { serial } => {
+            if let Some(restore) = restore {
+                radiacode_usb::reconnect_session(serial, restore).await
+            } else {
+                radiacode_usb::connect(serial).await
+            }
+        }
+    }
+}
+
+async fn reconnect_endpoint(
+    endpoint: &DeviceEndpoint,
     session: &SessionEpoch,
     restore: &SessionRestore,
-) -> radiacode_bluetooth::Result<RadiaCode> {
+) -> radiacode_core::Result<RadiaCode> {
     if !session.active() {
         return Err(Error::ConnectionClosed);
     }
-    RadiaCode::reconnect_session(mac, restore).await
+    connect_endpoint(endpoint, Some(restore)).await
 }

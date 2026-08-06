@@ -5,7 +5,7 @@ use crate::spectrogram::colormap::normalized_to_color;
 use crate::spectrogram::gap::display_count;
 use crate::spectrogram::model::{SpectrogramRow, SpectrogramSeries};
 use crate::spectrogram::settings::SpectrogramSettings;
-use crate::spectrogram::zscale::{map_count, resolve_z_range};
+use crate::spectrogram::zscale::{map_count, ZScaleRange};
 
 pub struct SpectrogramTexture {
     pub image: ColorImage,
@@ -30,6 +30,7 @@ impl SpectrogramTexture {
         source_cols: &[usize],
         display_rows: usize,
         settings: &SpectrogramSettings,
+        z_range: &ZScaleRange,
     ) {
         let width = source_cols.len().max(1);
         let height = display_rows.max(1);
@@ -48,8 +49,6 @@ impl SpectrogramTexture {
 
         let capture_interval = series.header.interval_secs;
         let native = native_rows(visible, source_cols, capture_interval);
-        let flat: Vec<u32> = native.iter().flatten().copied().collect();
-        let z_range = resolve_z_range(settings, &flat);
         let start_row = height.saturating_sub(native.len());
         let mut lit_pixels = 0usize;
         for (index, row) in native.iter().enumerate() {
@@ -91,7 +90,12 @@ fn native_rows(
                 .iter()
                 .map(|&index| {
                     let raw = row.counts.get(index).copied().unwrap_or(0);
-                    display_count(raw, row.kind, capture_interval_secs)
+                    display_count(
+                        raw,
+                        row.kind,
+                        capture_interval_secs,
+                        row.interval_secs,
+                    )
                 })
                 .collect()
         })
@@ -127,6 +131,7 @@ mod tests {
     use crate::spectrogram::gap::display_count;
     use crate::spectrogram::model::{RowKind, SpectrogramHeader, SpectrogramRow, SpectrogramSeries};
     use crate::spectrogram::settings::SpectrogramSettings;
+    use crate::spectrogram::zscale::compute_series_z_range;
 
     #[test]
     fn native_row_maps_one_to_one() {
@@ -150,6 +155,7 @@ mod tests {
                 raw_total: 1000,
             },
             5.0,
+            50.0,
         );
         let row = SpectrogramRow {
             elapsed_secs: 0.0,
@@ -197,6 +203,7 @@ mod tests {
         series.push_row(vec![0, 50, 0, 10], 5.0, RowKind::Normal, 1000);
         let cols = vec![0, 1, 2, 3];
         let mut texture = SpectrogramTexture::new(1, 1);
+        let z_range = compute_series_z_range(&series, &SpectrogramSettings::default());
         texture.rebuild(
             &series,
             &series.rows,
@@ -206,6 +213,7 @@ mod tests {
                 palette: ColorScheme::Viridis,
                 ..SpectrogramSettings::default()
             },
+            &z_range,
         );
         let lit = texture
             .image

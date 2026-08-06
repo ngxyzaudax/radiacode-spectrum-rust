@@ -1,6 +1,6 @@
 use egui::{Grid, RichText, Ui};
 
-use radiacode_bluetooth::{count_unit_label, dose_unit_label};
+use radiacode_core::{count_unit_label, dose_unit_label};
 
 use crate::monitor::state::MonitorState;
 use crate::theme::MUTED;

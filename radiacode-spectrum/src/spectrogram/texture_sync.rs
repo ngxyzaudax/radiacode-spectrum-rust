@@ -44,11 +44,15 @@ pub fn sync_texture(ctx: &Context, state: &mut SpectrogramState, layout: Spectro
         state.texture.dirty = true;
     }
     if state.texture.dirty {
+        if state.active_series().is_some() {
+            state.ensure_z_range();
+        }
+        let z_range = state.z_range;
         let series = match state.display {
             SpectrogramDisplay::Live => state.live_series.as_ref(),
             SpectrogramDisplay::Loaded => state.loaded_series.as_ref(),
         };
-        if let Some(series) = series {
+        if let (Some(series), Some(z_range)) = (series, z_range) {
             let visible = series.row_window(row_start, layout.display_rows);
             state.texture.rebuild(
                 series,
@@ -56,10 +60,10 @@ pub fn sync_texture(ctx: &Context, state: &mut SpectrogramState, layout: Spectro
                 &source_cols,
                 layout.display_rows,
                 &state.settings,
+                &z_range,
             );
         } else {
             state.texture = crate::spectrogram::texture::SpectrogramTexture::new(width, height);
-            state.texture.dirty = true;
         }
     }
     if state.texture_handle.is_none() {

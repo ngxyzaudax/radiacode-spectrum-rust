@@ -13,6 +13,7 @@ mod ui_device;
 mod ui_device_status;
 mod ui_disconnected;
 mod ui_plot;
+mod usb_access;
 mod view_tab;
 mod spectrogram;
 mod worker;

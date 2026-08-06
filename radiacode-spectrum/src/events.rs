@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use radiacode_bluetooth::ScannedDevice;
+use radiacode_core::{DeviceEndpoint, DiscoveredDevice};
 use tracing::{debug, info, warn};
 
 use crate::model::{ConnectionState, DeviceInfo, SpectrumView};
@@ -8,8 +8,8 @@ use crate::monitor::MonitorState;
 use crate::worker::{WorkerCommand, WorkerEvent};
 
 pub struct AppState {
-    pub devices: Vec<ScannedDevice>,
-    pub connecting_mac: Option<String>,
+    pub devices: Vec<DiscoveredDevice>,
+    pub connecting_endpoint: Option<DeviceEndpoint>,
     pub connection: ConnectionState,
     pub device_info: Option<DeviceInfo>,
     pub spectrum: Option<SpectrumView>,
@@ -29,7 +29,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             devices: Vec::new(),
-            connecting_mac: None,
+            connecting_endpoint: None,
             connection: ConnectionState::Disconnected,
             device_info: None,
             spectrum: None,
@@ -48,7 +48,7 @@ impl AppState {
 
     pub fn clear_session(&mut self) {
         self.connection = ConnectionState::Disconnected;
-        self.connecting_mac = None;
+        self.connecting_endpoint = None;
         self.device_info = None;
         self.spectrum = None;
         self.spectrum_sequence = 0;
@@ -77,18 +77,26 @@ impl AppState {
                 self.scanned_once = true;
                 self.devices = devices;
                 self.status = if self.devices.is_empty() {
-                    "No RadiaCode devices nearby.".into()
+                    "No RadiaCode devices found.".into()
                 } else {
                     format!("{} device(s) available.", self.devices.len())
                 };
                 None
             }
             WorkerEvent::Connected(info) if accept_session => {
-                info!(serial = %info.serial, mac = %info.mac, "ui connected");
+                info!(
+                    serial = %info.serial,
+                    address = %info.address,
+                    transport = ?info.transport,
+                    "ui connected"
+                );
+                let fresh_session = self.connection != ConnectionState::Connected;
                 self.connection = ConnectionState::Connected;
-                self.connecting_mac = None;
+                self.connecting_endpoint = None;
                 self.device_info = Some(info);
-                self.monitor.on_connect();
+                if fresh_session {
+                    self.monitor.on_connect();
+                }
                 self.spectrum_fetch_pending = false;
                 self.monitor_fetch_pending = false;
                 self.status = "Connected. Acquiring monitor data…".into();
@@ -110,6 +118,17 @@ impl AppState {
                 None
             }
             WorkerEvent::Reconnecting => None,
+            WorkerEvent::UsbPermissionRequired { endpoint } if accept_session => {
+                warn!(?endpoint, "ui usb permission required");
+                self.scanning = false;
+                self.spectrum_fetch_pending = false;
+                self.monitor_fetch_pending = false;
+                self.connection = ConnectionState::Disconnected;
+                self.connecting_endpoint = Some(endpoint.clone());
+                self.status = "USB access required.".into();
+                None
+            }
+            WorkerEvent::UsbPermissionRequired { .. } => None,
             WorkerEvent::Spectrum(spectrum) if accept_session => {
                 self.spectrum = Some(spectrum);
                 self.spectrum_sequence = self.spectrum_sequence.saturating_add(1);
@@ -121,6 +140,7 @@ impl AppState {
             }
             WorkerEvent::Spectrum(_) => None,
             WorkerEvent::DeviceStatus(status) if accept_session => {
+                self.monitor_fetch_pending = false;
                 if let Some(info) = self.device_info.as_mut() {
                     info.apply_status(status);
                     debug!(
@@ -159,7 +179,7 @@ impl AppState {
                 self.monitor_fetch_pending = false;
                 if self.connection == ConnectionState::Connecting {
                     self.connection = ConnectionState::Disconnected;
-                    self.connecting_mac = None;
+                    self.connecting_endpoint = None;
                 }
                 self.status = message;
                 None

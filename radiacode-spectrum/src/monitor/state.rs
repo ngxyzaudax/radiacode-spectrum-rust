@@ -1,10 +1,12 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use radiacode_bluetooth::{AlarmLimits, AlarmLimitsUpdate, LiveRates};
+use radiacode_core::{AlarmLimits, AlarmLimitsUpdate, LiveRates};
 
 const HISTORY_MINUTES: f64 = 10.0;
 const MAX_SAMPLES: usize = 600;
+const MIN_SAMPLE_SPACING: Duration = Duration::from_secs(1);
+const OUTLIER_FACTOR: f32 = 3.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MonitorSample {
@@ -76,8 +78,18 @@ impl MonitorState {
     pub fn push_sample(&mut self, rates: LiveRates) {
         let started_at = self.started_at.get_or_insert_with(Instant::now);
         let elapsed = started_at.elapsed();
+        if self
+            .history
+            .back()
+            .is_some_and(|sample| elapsed.saturating_sub(sample.elapsed) < MIN_SAMPLE_SPACING)
+        {
+            return;
+        }
         let dose_rate = rates.dose_rate.max(0.0);
         let count_rate = rates.count_rate.max(0.0);
+        if self.is_rate_outlier(dose_rate, count_rate) {
+            return;
+        }
         self.history.push_back(MonitorSample {
             dose_rate,
             count_rate,
@@ -128,6 +140,27 @@ impl MonitorState {
         )
     }
 
+    fn is_rate_outlier(&self, dose_rate: f32, count_rate: f32) -> bool {
+        if self.history.len() < 3 {
+            return false;
+        }
+        let recent_dose: Vec<f32> = self
+            .history
+            .iter()
+            .rev()
+            .take(8)
+            .map(|sample| sample.dose_rate)
+            .collect();
+        let recent_count: Vec<f32> = self
+            .history
+            .iter()
+            .rev()
+            .take(8)
+            .map(|sample| sample.count_rate)
+            .collect();
+        dose_outlier(dose_rate, &recent_dose) || count_outlier(count_rate, &recent_count)
+    }
+
     #[cfg(test)]
     pub fn default_for_tests() -> Self {
         Self::new()
@@ -168,4 +201,22 @@ fn alarm_level(value: Option<f32>, limits: Option<(f32, f32)>) -> AlarmLevel {
     } else {
         AlarmLevel::Normal
     }
+}
+
+fn dose_outlier(value: f32, recent: &[f32]) -> bool {
+    rate_outlier(value, recent)
+}
+
+fn count_outlier(value: f32, recent: &[f32]) -> bool {
+    rate_outlier(value, recent)
+}
+
+fn rate_outlier(value: f32, recent: &[f32]) -> bool {
+    if recent.len() < 3 {
+        return false;
+    }
+    let mut sorted = recent.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2].max(0.001);
+    value > median * OUTLIER_FACTOR || value < median / OUTLIER_FACTOR
 }

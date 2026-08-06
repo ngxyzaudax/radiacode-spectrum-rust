@@ -1,6 +1,7 @@
 use crate::monitor::state::{MonitorSample, MonitorState};
 
 const WINDOW_SECS: f64 = 120.0;
+const Y_HEADROOM: f64 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlotBounds {
@@ -32,43 +33,59 @@ pub fn plot_bounds(monitor: &MonitorState, series: PlotSeries) -> PlotBounds {
         .map(elapsed_secs)
         .unwrap_or(0.0)
         .max(1.0);
-    let x_min = if x_max > WINDOW_SECS {
-        x_max - WINDOW_SECS
-    } else {
-        0.0
-    };
-    let window = PlotBounds {
-        x_min,
-        x_max,
-        y_min: 0.0,
-        y_max: 1.0,
-    };
+    let oldest = monitor
+        .history
+        .front()
+        .map(elapsed_secs)
+        .unwrap_or(0.0);
+    let x_min = window_x_min(oldest, x_max);
     let visible: Vec<f64> = monitor
         .history
         .iter()
-        .filter(|sample| sample_in_window(sample, window))
+        .filter(|sample| sample_in_window(sample, PlotBounds {
+            x_min,
+            x_max,
+            y_min: 0.0,
+            y_max: 1.0,
+        }))
         .map(|sample| series_value(sample, series))
         .collect();
-    let (mut y_min, mut y_max) = value_range(&visible);
-    if let Some(limits) = monitor.limits {
-        let (alarm_one, alarm_two) = alarm_values(limits, series);
-        y_min = y_min.min(f64::from(alarm_one.min(alarm_two)));
-        y_max = y_max.max(f64::from(alarm_one.max(alarm_two)));
-    }
-    if !visible.is_empty() {
-        let span = (y_max - y_min).max(1e-6);
-        y_min = (y_min - span * 0.08).max(0.0);
-        y_max += span * 0.12;
-    }
-    if (y_max - y_min).abs() < 1e-6 {
-        y_max = y_min + 1.0;
-    }
+    let alarm_max = monitor
+        .limits
+        .map(|limits| alarm_ceiling(limits, series))
+        .unwrap_or(0.0);
     PlotBounds {
         x_min,
         x_max,
-        y_min,
-        y_max,
+        y_min: 0.0,
+        y_max: upper_y_bound(&visible, alarm_max, series),
     }
+}
+
+fn window_x_min(oldest: f64, x_max: f64) -> f64 {
+    let scrolled = (x_max - WINDOW_SECS).max(0.0);
+    if oldest > scrolled {
+        oldest
+    } else {
+        scrolled
+    }
+}
+
+fn alarm_ceiling(limits: radiacode_core::AlarmLimits, series: PlotSeries) -> f64 {
+    match series {
+        PlotSeries::Dose => f64::from(limits.l1_dose_rate.max(limits.l2_dose_rate).max(0.0)),
+        PlotSeries::Count => f64::from(limits.l1_count_rate.max(limits.l2_count_rate).max(0.0)),
+    }
+}
+
+fn upper_y_bound(values: &[f64], alarm_max: f64, series: PlotSeries) -> f64 {
+    let data_max = values.iter().copied().fold(0.0_f64, f64::max);
+    let floor = match series {
+        PlotSeries::Dose => 0.1,
+        PlotSeries::Count => 1.0,
+    };
+    let peak = data_max.max(alarm_max);
+    (peak * (1.0 + Y_HEADROOM)).max(floor)
 }
 
 fn sample_in_window(sample: &MonitorSample, bounds: PlotBounds) -> bool {
@@ -85,32 +102,6 @@ fn series_value(sample: &MonitorSample, series: PlotSeries) -> f64 {
         PlotSeries::Dose => f64::from(sample.dose_rate.max(0.0)),
         PlotSeries::Count => f64::from(sample.count_rate.max(0.0)),
     }
-}
-
-fn alarm_values(limits: radiacode_bluetooth::AlarmLimits, series: PlotSeries) -> (f32, f32) {
-    match series {
-        PlotSeries::Dose => (
-            limits.l1_dose_rate.max(0.0),
-            limits.l2_dose_rate.max(0.0),
-        ),
-        PlotSeries::Count => (
-            limits.l1_count_rate.max(0.0),
-            limits.l2_count_rate.max(0.0),
-        ),
-    }
-}
-
-fn value_range(values: &[f64]) -> (f64, f64) {
-    if values.is_empty() {
-        return (0.0, 1.0);
-    }
-    let mut y_min = f64::INFINITY;
-    let mut y_max = 0.0_f64;
-    for value in values {
-        y_min = y_min.min(*value);
-        y_max = y_max.max(*value);
-    }
-    (y_min, y_max)
 }
 
 #[cfg(test)]
@@ -139,13 +130,59 @@ mod tests {
     }
 
     #[test]
-    fn y_range_follows_visible_data() {
+    fn y_axis_always_starts_at_zero() {
         let mut monitor = MonitorState::default_for_tests();
         monitor.history.push_back(sample(1.0, 10.0, 100.0));
         monitor.history.push_back(sample(2.0, 12.0, 120.0));
         let bounds = plot_bounds(&monitor, PlotSeries::Dose);
-        assert!(bounds.y_min < 10.0);
+        assert_eq!(bounds.y_min, 0.0);
         assert!(bounds.y_max > 12.0);
-        assert!(bounds.y_min >= 0.0);
+    }
+
+    #[test]
+    fn y_max_uses_alarm_when_data_is_lower() {
+        let mut monitor = MonitorState::default_for_tests();
+        monitor.limits = Some(radiacode_core::AlarmLimits {
+            l1_count_rate: 20.0,
+            l2_count_rate: 40.0,
+            l1_dose_rate: 0.15,
+            l2_dose_rate: 0.3,
+            dose_unit_sv: true,
+            count_unit_cpm: false,
+        });
+        monitor.history.push_back(sample(1.0, 0.09, 17.0));
+        monitor.history.push_back(sample(2.0, 0.09, 17.0));
+        let bounds = plot_bounds(&monitor, PlotSeries::Dose);
+        assert_eq!(bounds.y_min, 0.0);
+        assert!((bounds.y_max - 0.36).abs() < 0.001);
+    }
+
+    #[test]
+    fn y_max_follows_window_peak_above_alarms() {
+        let mut monitor = MonitorState::default_for_tests();
+        monitor.limits = Some(radiacode_core::AlarmLimits {
+            l1_count_rate: 20.0,
+            l2_count_rate: 40.0,
+            l1_dose_rate: 0.15,
+            l2_dose_rate: 0.3,
+            dose_unit_sv: true,
+            count_unit_cpm: false,
+        });
+        monitor.history.push_back(sample(1.0, 0.09, 17.0));
+        monitor.history.push_back(sample(2.0, 0.5, 17.0));
+        monitor.history.push_back(sample(3.0, 0.09, 17.0));
+        let bounds = plot_bounds(&monitor, PlotSeries::Dose);
+        assert_eq!(bounds.y_min, 0.0);
+        assert!((bounds.y_max - 0.6).abs() < 0.001);
+    }
+
+    #[test]
+    fn short_history_fits_x_window_to_available_samples() {
+        let mut monitor = MonitorState::default_for_tests();
+        monitor.history.push_back(sample(3591.0, 0.09, 17.0));
+        monitor.history.push_back(sample(3675.0, 0.09, 17.0));
+        let bounds = plot_bounds(&monitor, PlotSeries::Dose);
+        assert!((bounds.x_min - 3591.0).abs() < 0.01);
+        assert!((bounds.x_max - 3675.0).abs() < 0.01);
     }
 }

@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::App;
@@ -11,6 +12,7 @@ use crate::monitor::{draw_monitor_controls, draw_monitor_view, MonitorControlsAc
 use crate::scale::YScale;
 use crate::spectrogram::ui_controls::{draw_spectrogram_controls, SpectrogramControlsAction};
 use crate::spectrogram::ui_view::draw_spectrogram_view;
+use crate::spectrogram::capture::SpectrogramCapture;
 use crate::spectrogram::SpectrogramState;
 use crate::theme;
 use crate::ui_controls::{draw_spectrum_controls, ControlsAction, ControlsProps};
@@ -18,10 +20,11 @@ use crate::ui_device::{draw_device_panel, DeviceAction, DevicePanelProps};
 use crate::ui_disconnected::{draw_disconnected_view, shows_tab_content};
 use crate::ui_plot::draw_spectrum_plot;
 use crate::view_tab::ViewTab;
+use radiacode_core::{merge_discovered, resolve_usb_endpoint, DeviceEndpoint};
+use crate::usb_access::{
+    draw_usb_access_dialog, usb_access_required, UsbAccessAction, UsbAccessOutcome, UsbAccessPrompt,
+};
 use crate::worker::{spawn_worker, WorkerCommand, WorkerEvent, WorkerHandle};
-
-const MONITOR_POLL_SECS: u64 = 1;
-const STATUS_POLL_SECS: u64 = 5;
 
 pub struct SpectrumApp {
     worker: WorkerHandle,
@@ -29,32 +32,33 @@ pub struct SpectrumApp {
     spectrogram: SpectrogramState,
     active_tab: ViewTab,
     previous_tab: ViewTab,
-    live: bool,
     y_scale: YScale,
     smooth_window: usize,
     theme_ready: bool,
     startup_scan_sent: bool,
     icon_sent: bool,
     session_blocked: bool,
+    usb_access_prompt: Option<UsbAccessPrompt>,
 }
 
 impl SpectrumApp {
     pub fn new() -> Self {
-        let mut spectrogram = SpectrogramState::new();
+        let capture = Arc::new(Mutex::new(SpectrogramCapture::new()));
+        let mut spectrogram = SpectrogramState::new(Arc::clone(&capture));
         spectrogram.refresh_history();
         Self {
-            worker: spawn_worker(),
+            worker: spawn_worker(capture),
             state: AppState::new(),
             spectrogram,
             active_tab: ViewTab::Monitor,
             previous_tab: ViewTab::Monitor,
-            live: true,
             y_scale: YScale::Linear,
             smooth_window: 1,
             theme_ready: false,
             startup_scan_sent: false,
             icon_sent: false,
             session_blocked: false,
+            usb_access_prompt: None,
         }
     }
 
@@ -72,8 +76,8 @@ impl SpectrumApp {
     fn send(&mut self, command: WorkerCommand) {
         debug!(?command, "sending worker command");
         if self.worker.commands.send(command).is_err() {
-            warn!("bluetooth worker stopped");
-            self.state.status = "Bluetooth worker stopped.".into();
+            warn!("device worker stopped");
+            self.state.status = "Device worker stopped.".into();
         }
     }
 
@@ -81,6 +85,12 @@ impl SpectrumApp {
         if self.state.try_schedule_spectrum() {
             self.send(WorkerCommand::FetchSpectrum);
         }
+    }
+
+    fn sync_capture_interval(&mut self) {
+        self.send(WorkerCommand::SetCaptureInterval(
+            self.spectrogram.settings.capture_interval_secs,
+        ));
     }
 
     fn schedule_monitor(&mut self) {
@@ -91,6 +101,12 @@ impl SpectrumApp {
 
     fn poll_events(&mut self) {
         while let Ok(event) = self.worker.events.try_recv() {
+            if let WorkerEvent::UsbPermissionRequired { endpoint } = &event {
+                if let Some(status) = usb_access_required(endpoint) {
+                    self.usb_access_prompt =
+                        Some(UsbAccessPrompt::new(endpoint.clone(), status));
+                }
+            }
             let fetch_spectrum = matches!(&event, WorkerEvent::Connected(_)) && !self.session_blocked;
             let initial_connect =
                 matches!(&event, WorkerEvent::Connected(_))
@@ -100,7 +116,8 @@ impl SpectrumApp {
                     self.spectrogram.on_reconnect();
                 }
                 WorkerEvent::Connected(_) if !self.session_blocked && initial_connect => {
-                    self.spectrogram.on_session_connect();
+                    self.sync_capture_interval();
+                    self.spectrogram.sync_from_capture();
                 }
                 WorkerEvent::Disconnected => {
                     self.spectrogram.on_disconnect();
@@ -120,24 +137,6 @@ impl SpectrumApp {
         }
     }
 
-    fn sync_spectrogram(&mut self) {
-        let Some(spectrum) = self.state.spectrum.as_ref() else {
-            return;
-        };
-        let serial = self
-            .state
-            .device_info
-            .as_ref()
-            .map(|info| info.serial.as_str());
-        self.spectrogram.ingest_spectrum(
-            spectrum,
-            serial,
-            self.state.spectrum_sequence,
-            self.active_tab,
-        );
-        self.spectrogram.maybe_auto_save();
-    }
-
     fn start_scan(&mut self) {
         info!("ui starting scan");
         self.state.scanning = true;
@@ -145,13 +144,60 @@ impl SpectrumApp {
         self.send(WorkerCommand::Scan);
     }
 
-    fn start_connect(&mut self, mac: String) {
-        info!(%mac, "ui starting connect");
+    fn refresh_usb_devices(&mut self) {
+        let bluetooth: Vec<_> = self
+            .state
+            .devices
+            .iter()
+            .filter(|device| device.endpoint.transport() == radiacode_core::TransportKind::Bluetooth)
+            .cloned()
+            .collect();
+        match radiacode_usb::scan_usb_devices() {
+            Ok(usb) => {
+                self.state.devices = merge_discovered(usb, bluetooth);
+            }
+            Err(error) => {
+                warn!(%error, "usb rescan failed");
+            }
+        }
+    }
+
+    fn start_connect(&mut self, endpoint: DeviceEndpoint) {
+        self.start_connect_internal(endpoint, false);
+    }
+
+    fn start_connect_internal(&mut self, endpoint: DeviceEndpoint, force_usb: bool) {
+        let endpoint = resolve_usb_endpoint(&self.state.devices, &endpoint);
+        if !force_usb {
+            if let Some(status) = usb_access_required(&endpoint) {
+                info!(?endpoint, ?status, "usb access required before connect");
+                self.session_blocked = false;
+                self.state.connection = ConnectionState::Disconnected;
+                self.state.connecting_endpoint = Some(endpoint.clone());
+                self.state.status = "USB access required.".into();
+                self.usb_access_prompt = Some(UsbAccessPrompt::new(endpoint, status));
+                return;
+            }
+        }
+        let address = endpoint.address_label().to_string();
+        info!(%address, ?endpoint, force_usb, "ui starting connect");
         self.session_blocked = false;
         self.state.connection = ConnectionState::Connecting;
-        self.state.connecting_mac = Some(mac.clone());
-        self.state.status = format!("Connecting to {mac}…");
-        self.send(WorkerCommand::Connect(mac));
+        self.state.connecting_endpoint = Some(endpoint.clone());
+        self.state.status = format!("Connecting to {address}…");
+        let hint_rssi = self.hint_rssi_for_endpoint(&endpoint);
+        self.send(WorkerCommand::Connect {
+            endpoint,
+            hint_rssi,
+        });
+    }
+
+    fn hint_rssi_for_endpoint(&self, endpoint: &DeviceEndpoint) -> Option<i16> {
+        self.state
+            .devices
+            .iter()
+            .find(|device| device.endpoint == *endpoint)
+            .and_then(|device| device.rssi)
     }
 
     fn disconnect_device(&mut self) {
@@ -166,7 +212,7 @@ impl SpectrumApp {
     fn handle_device_action(&mut self, action: DeviceAction) {
         match action {
             DeviceAction::Scan => self.start_scan(),
-            DeviceAction::Connect(mac) => self.start_connect(mac),
+            DeviceAction::Connect(endpoint) => self.start_connect(endpoint),
             DeviceAction::Disconnect => self.disconnect_device(),
         }
     }
@@ -223,21 +269,63 @@ impl SpectrumApp {
             }
             SpectrogramControlsAction::CloseLoaded => self.spectrogram.close_loaded(),
             SpectrogramControlsAction::Load(path) => self.spectrogram.request_load(path),
-            SpectrogramControlsAction::SettingsChanged | SpectrogramControlsAction::LibraryChanged => {}
+            SpectrogramControlsAction::SettingsChanged => {
+                self.sync_capture_interval();
+            }
+            SpectrogramControlsAction::LibraryChanged => {}
         }
     }
 
-    fn enter_spectrum_tab(&mut self) {
-        if self.state.connection == ConnectionState::Connected {
-            self.schedule_spectrum();
-        }
-    }
+    fn enter_spectrum_tab(&mut self) {}
 
     fn enter_spectrogram_tab(&mut self) {
         info!("entered spectrogram tab");
         self.spectrogram.on_tab_enter();
-        if self.state.connection == ConnectionState::Connected {
-            self.schedule_spectrum();
+    }
+
+    fn poll_usb_access(&mut self) {
+        let Some(prompt) = self.usb_access_prompt.as_mut() else {
+            return;
+        };
+        if let Some(outcome) = prompt.poll_install() {
+            match outcome {
+                UsbAccessOutcome::Installed { endpoint, need_replug } => {
+                    let message = prompt.message.clone();
+                    self.start_scan();
+                    if need_replug {
+                        self.state.status = message;
+                    } else {
+                        self.usb_access_prompt = None;
+                        self.refresh_usb_devices();
+                        let endpoint = resolve_usb_endpoint(&self.state.devices, &endpoint);
+                        self.start_connect_internal(endpoint, true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_usb_access_action(&mut self, action: UsbAccessAction) {
+        let Some(prompt) = self.usb_access_prompt.as_mut() else {
+            return;
+        };
+        match action {
+            UsbAccessAction::Install => prompt.start_install(),
+            UsbAccessAction::RescanAndConnect => {
+                prompt.refresh_status();
+                let preferred = prompt.endpoint.clone();
+                self.usb_access_prompt = None;
+                self.refresh_usb_devices();
+                let endpoint = resolve_usb_endpoint(&self.state.devices, &preferred);
+                self.start_connect_internal(endpoint, true);
+            }
+            UsbAccessAction::Dismiss => {
+                self.usb_access_prompt = None;
+                self.state.connecting_endpoint = None;
+                if self.state.status == "USB access required." {
+                    self.state.status = "USB setup cancelled.".into();
+                }
+            }
         }
     }
 
@@ -245,17 +333,8 @@ impl SpectrumApp {
         if self.state.connection != ConnectionState::Connected {
             return;
         }
-        let monitor_interval = match self.active_tab {
-            ViewTab::Monitor => MONITOR_POLL_SECS,
-            _ => STATUS_POLL_SECS,
-        };
-        if self.state.monitor_refresh_due(true, monitor_interval) {
-            debug!(interval = monitor_interval, "monitor refresh due");
-            self.schedule_monitor();
-        }
-        let interval = self.spectrogram.settings.capture_interval_secs.round() as u64;
-        if self.state.live_refresh_due(self.live, interval) {
-            debug!(interval, "spectrum refresh due");
+        if self.active_tab == ViewTab::Spectrum && self.state.live_refresh_due(true, 1) {
+            debug!("spectrum tab live refresh due");
             self.schedule_spectrum();
         }
     }
@@ -273,8 +352,9 @@ impl App for SpectrumApp {
             self.start_scan();
         }
         self.poll_events();
+        self.poll_usb_access();
         if self.state.connection == ConnectionState::Connected {
-            self.sync_spectrogram();
+            self.spectrogram.sync_from_capture();
         }
         self.maybe_live_refresh();
         ctx.request_repaint_after(Duration::from_millis(200));
@@ -282,6 +362,11 @@ impl App for SpectrumApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if let Some(prompt) = self.usb_access_prompt.as_mut() {
+            if let Some(action) = draw_usb_access_dialog(&ctx, prompt) {
+                self.handle_usb_access_action(action);
+            }
+        }
         Panel::left("sidebar")
             .resizable(true)
             .default_size(300.0)
@@ -291,7 +376,7 @@ impl App for SpectrumApp {
                     DevicePanelProps {
                         devices: &self.state.devices,
                         connection: self.state.connection,
-                        connecting_mac: self.state.connecting_mac.as_deref(),
+                        connecting_endpoint: self.state.connecting_endpoint.as_ref(),
                         device_info: self.state.device_info.as_ref(),
                         scanning: self.state.scanning,
                         busy: self.state.busy,
@@ -320,7 +405,6 @@ impl App for SpectrumApp {
                                 ui,
                                 ControlsProps {
                                     connection: self.state.connection,
-                                    live: &mut self.live,
                                     y_scale: &mut self.y_scale,
                                     smooth_window: &mut self.smooth_window,
                                 },

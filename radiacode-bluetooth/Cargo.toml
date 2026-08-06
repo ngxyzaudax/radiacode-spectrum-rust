@@ -2,17 +2,22 @@
 name = "radiacode-bluetooth"
 version = "0.1.0"
 edition = "2024"
-description = "Bluetooth LE transport and protocol client for RadiaCode radiation detectors"
+description = "Bluetooth LE transport for RadiaCode radiation detectors"
 license = "MIT"
 
 [dependencies]
+async-trait = "0.1"
 btleplug = "0.11"
 futures = "0.3"
+radiacode-core = { path = "../radiacode-core" }
 thiserror = "2"
-time = { version = "0.3", features = ["local-offset"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
 uuid = "1"
 tracing = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bdaddr = "0.2.0-alpha.4"
+btmgmt = "0.3.0-alpha.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

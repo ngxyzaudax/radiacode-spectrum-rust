@@ -32,8 +32,9 @@ pub fn latest_real_time_rates(data: &[u8]) -> Option<RealTimeRates> {
 pub fn latest_snapshot(data: &[u8]) -> DataBufSnapshot {
     let mut buffer = BytesBuffer::new(data.to_vec());
     let mut snapshot = DataBufSnapshot::default();
+    let mut best_rates: Option<(u8, u8, RealTimeRates)> = None;
     while buffer.size() >= 7 {
-        let Ok(_seq) = buffer.take_u8() else {
+        let Ok(seq) = buffer.take_u8() else {
             break;
         };
         let Ok(eid) = buffer.take_u8() else {
@@ -47,12 +48,30 @@ pub fn latest_snapshot(data: &[u8]) -> DataBufSnapshot {
         };
         match parse_record(&mut buffer, eid, gid) {
             Ok(RecordParse::Rare(status)) => snapshot.rare = Some(status),
-            Ok(RecordParse::Rates(rates)) => snapshot.rates = Some(rates),
+            Ok(RecordParse::Rates(rates)) => {
+                let replace = best_rates.as_ref().is_none_or(|(best_seq, best_gid, _)| {
+                    seq > *best_seq
+                        || (seq == *best_seq && rates_record_rank(gid) > rates_record_rank(*best_gid))
+                });
+                if replace {
+                    best_rates = Some((seq, gid, rates));
+                }
+            }
             Ok(RecordParse::Skip) => {}
             Err(_) => break,
         }
     }
+    snapshot.rates = best_rates.map(|(_, _, rates)| rates);
     snapshot
+}
+
+fn rates_record_rank(gid: u8) -> u8 {
+    match gid {
+        0 => 3,
+        2 => 2,
+        1 => 1,
+        _ => 0,
+    }
 }
 
 enum RecordParse {

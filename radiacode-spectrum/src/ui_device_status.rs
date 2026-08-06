@@ -2,6 +2,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use crate::model::DeviceInfo;
 use crate::theme::{ACCENT, MUTED};
+use radiacode_core::TransportKind;
 
 pub fn draw_status_row(ui: &mut Ui, info: &DeviceInfo) {
     ui.horizontal(|ui| {
@@ -13,9 +14,42 @@ pub fn draw_status_row(ui: &mut Ui, info: &DeviceInfo) {
         if let Some(temperature) = info.temperature_c {
             draw_temperature_chip(ui, temperature);
         }
-        if let Some(rssi) = info.rssi_dbm {
-            draw_signal_chip(ui, rssi);
+        match info.transport {
+            TransportKind::Bluetooth => draw_bluetooth_link_row(ui, info.rssi_dbm),
+            TransportKind::Usb => draw_usb_link_row(ui),
         }
+    });
+}
+
+fn draw_bluetooth_link_row(ui: &mut Ui, rssi_dbm: Option<i16>) {
+    match rssi_dbm {
+        Some(rssi) => {
+            draw_link_quality_chip(ui, rssi);
+            draw_signal_strength_chip(ui, rssi);
+        }
+        None => {
+            draw_pending_link_chip(ui, "Link");
+            draw_pending_link_chip(ui, "Signal");
+        }
+    }
+}
+
+fn draw_usb_link_row(ui: &mut Ui) {
+    draw_na_chip(ui, "Link");
+    draw_na_chip(ui, "Signal");
+}
+
+fn draw_na_chip(ui: &mut Ui, label: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).small().color(MUTED));
+        ui.label(egui::RichText::new("N/A").strong().color(MUTED));
+    });
+}
+
+fn draw_pending_link_chip(ui: &mut Ui, label: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).small().color(MUTED));
+        ui.label(egui::RichText::new("…").strong().color(MUTED));
     });
 }
 
@@ -31,7 +65,7 @@ fn draw_battery_chip(ui: &mut Ui, percent: f32) {
     ui.horizontal(|ui| {
         paint_battery_icon(ui, percent);
         ui.label(
-            egui::RichText::new(format!("{percent:.0}%"))
+            egui::RichText::new(format!("{percent:.1}%"))
                 .strong()
                 .color(battery_color(percent)),
         );
@@ -49,15 +83,40 @@ fn draw_temperature_chip(ui: &mut Ui, celsius: f32) {
     });
 }
 
-fn draw_signal_chip(ui: &mut Ui, rssi_dbm: i16) {
+fn draw_link_quality_chip(ui: &mut Ui, rssi_dbm: i16) {
     ui.horizontal(|ui| {
         paint_signal_icon(ui, rssi_dbm);
+        ui.label(
+            egui::RichText::new(link_quality_label(rssi_dbm))
+                .strong()
+                .color(signal_color(rssi_dbm)),
+        );
+    });
+}
+
+fn draw_signal_strength_chip(ui: &mut Ui, rssi_dbm: i16) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Signal").small().color(MUTED));
         ui.label(
             egui::RichText::new(format!("{rssi_dbm} dBm"))
                 .strong()
                 .color(signal_color(rssi_dbm)),
         );
     });
+}
+
+fn link_quality_label(rssi_dbm: i16) -> &'static str {
+    if rssi_dbm >= -55 {
+        "Excellent"
+    } else if rssi_dbm >= -65 {
+        "Good"
+    } else if rssi_dbm >= -75 {
+        "Fair"
+    } else if rssi_dbm >= -85 {
+        "Weak"
+    } else {
+        "Poor"
+    }
 }
 
 fn battery_color(percent: f32) -> Color32 {

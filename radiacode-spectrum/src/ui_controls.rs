@@ -6,7 +6,6 @@ use crate::smooth::normalize_window;
 
 pub struct ControlsProps<'a> {
     pub connection: ConnectionState,
-    pub live: &'a mut bool,
     pub y_scale: &'a mut YScale,
     pub smooth_window: &'a mut usize,
 }
@@ -25,7 +24,6 @@ pub fn draw_spectrum_controls(ui: &mut Ui, props: ControlsProps<'_>) -> Option<C
     ui.separator();
     ui.add_space(8.0);
     ui.label(RichText::new("Spectrum").strong());
-    ui.checkbox(props.live, "Live refresh");
     ui.add_space(4.0);
     ui.label("Y scale");
     ui.horizontal(|ui| {
@@ -42,8 +40,7 @@ pub fn draw_spectrum_controls(ui: &mut Ui, props: ControlsProps<'_>) -> Option<C
         *props.smooth_window = normalize_window(slider as usize);
     }
     ui.add_space(6.0);
-    if ui.button("Reset accumulation").clicked()
-    {
+    if ui.button("Reset accumulation").clicked() {
         action = Some(ControlsAction::Reset);
     }
     action

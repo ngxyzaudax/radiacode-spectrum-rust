@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Radiacode
-Comment=Bluetooth gamma spectrometer for RadiaCode detectors
+Comment=USB and Bluetooth gamma spectrometer for RadiaCode detectors
 Exec=/home/ng/Documents/experimental/radiacode/target/release/radiacode-spectrum
 Icon=radiacode-spectrum
 StartupWMClass=radiacode-spectrum

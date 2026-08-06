@@ -1,15 +1,15 @@
 use egui::{RichText, Ui};
 
-use radiacode_bluetooth::ScannedDevice;
+use radiacode_core::{DeviceEndpoint, DiscoveredDevice, TransportKind};
 
 use crate::model::{ConnectionState, DeviceInfo};
 use crate::theme::{ACCENT, MUTED};
 use crate::ui_device_status::draw_status_row;
 
 pub struct DevicePanelProps<'a> {
-    pub devices: &'a [ScannedDevice],
+    pub devices: &'a [DiscoveredDevice],
     pub connection: ConnectionState,
-    pub connecting_mac: Option<&'a str>,
+    pub connecting_endpoint: Option<&'a DeviceEndpoint>,
     pub device_info: Option<&'a DeviceInfo>,
     pub scanning: bool,
     pub busy: bool,
@@ -19,7 +19,7 @@ pub struct DevicePanelProps<'a> {
 
 pub enum DeviceAction {
     Scan,
-    Connect(String),
+    Connect(DeviceEndpoint),
     Disconnect,
 }
 
@@ -35,7 +35,7 @@ pub fn draw_device_panel(ui: &mut Ui, props: DevicePanelProps<'_>) -> Option<Dev
             }
         }
         ConnectionState::Connecting => {
-            draw_connecting(ui, props.connecting_mac.unwrap_or("device"));
+            draw_connecting(ui, props.connecting_endpoint);
         }
         ConnectionState::Disconnected => {
             action = draw_discovery(ui, &props).or(action);
@@ -56,7 +56,8 @@ fn draw_connected(ui: &mut Ui, info: &DeviceInfo) -> Option<DeviceAction> {
     ui.add_space(4.0);
     draw_status_row(ui, info);
     ui.add_space(4.0);
-    ui.label(RichText::new(&info.mac).monospace());
+    ui.label(format!("Transport {}", info.transport_label()));
+    ui.label(RichText::new(&info.address).monospace());
     ui.label(format!("Firmware {}", info.firmware));
     ui.label(format!(
         "Calibration  a0={:.2}  a1={:.3}  a2={:.5}",
@@ -72,15 +73,18 @@ fn draw_connected(ui: &mut Ui, info: &DeviceInfo) -> Option<DeviceAction> {
     action
 }
 
-fn draw_connecting(ui: &mut Ui, mac: &str) {
+fn draw_connecting(ui: &mut Ui, endpoint: Option<&DeviceEndpoint>) {
     ui.label(RichText::new("Connecting").strong());
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.spinner();
-        ui.label(RichText::new(mac).monospace());
+        let label = endpoint
+            .map(|value| value.address_label())
+            .unwrap_or("device");
+        ui.label(RichText::new(label).monospace());
     });
     ui.add_space(6.0);
-    ui.label(RichText::new("Keep the detector nearby and powered on.").weak());
+    ui.label(RichText::new("Keep the detector powered on.").weak());
 }
 
 fn draw_discovery(ui: &mut Ui, props: &DevicePanelProps<'_>) -> Option<DeviceAction> {
@@ -102,7 +106,7 @@ fn draw_discovery(ui: &mut Ui, props: &DevicePanelProps<'_>) -> Option<DeviceAct
     if props.scanning {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Searching for RadiaCode over Bluetooth…");
+            ui.label("Searching for RadiaCode over USB and Bluetooth…");
         });
         return action;
     }
@@ -121,13 +125,26 @@ fn draw_discovery(ui: &mut Ui, props: &DevicePanelProps<'_>) -> Option<DeviceAct
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(device.display_label()).strong());
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(device.display_label()).strong());
+                                ui.label(
+                                    RichText::new(device.transport_tag())
+                                        .small()
+                                        .color(MUTED),
+                                );
+                            });
                             if let Some(serial) = &device.serial {
                                 ui.label(RichText::new(serial).small());
                             }
-                            ui.label(RichText::new(&device.address).monospace().small());
-                            if let Some(rssi) = device.rssi {
-                                ui.label(RichText::new(format!("{rssi} dBm")).weak().small());
+                            ui.label(
+                                RichText::new(device.endpoint.address_label())
+                                    .monospace()
+                                    .small(),
+                            );
+                            if device.endpoint.transport() == TransportKind::Bluetooth {
+                                if let Some(rssi) = device.rssi {
+                                    ui.label(RichText::new(format!("{rssi} dBm")).weak().small());
+                                }
                             }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -135,7 +152,7 @@ fn draw_discovery(ui: &mut Ui, props: &DevicePanelProps<'_>) -> Option<DeviceAct
                                 .add_enabled(!props.busy, egui::Button::new("Connect"))
                                 .clicked()
                             {
-                                action = Some(DeviceAction::Connect(device.address.clone()));
+                                action = Some(DeviceAction::Connect(device.endpoint.clone()));
                             }
                         });
                     });
@@ -149,11 +166,11 @@ fn draw_empty_discovery(ui: &mut Ui, scanned_once: bool) {
     if scanned_once {
         ui.label("No detectors found.");
         ui.label(
-            RichText::new("Power on the RadiaCode, keep it nearby, then scan again.")
+            RichText::new("Plug in USB, power on Bluetooth, then scan again.")
                 .weak()
                 .small(),
         );
     } else {
-        ui.label(RichText::new("Starting Bluetooth discovery…").weak());
+        ui.label(RichText::new("Starting USB and Bluetooth discovery…").weak());
     }
 }

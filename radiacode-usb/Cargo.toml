@@ -1,0 +1,14 @@
+[package]
+name = "radiacode-usb"
+version = "0.1.0"
+edition = "2024"
+description = "USB transport for RadiaCode radiation detectors"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+radiacode-core = { path = "../radiacode-core" }
+rusb = "0.9"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"

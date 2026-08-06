@@ -9,6 +9,7 @@ const GAP_WALL_FACTOR: f64 = 3.0;
 const SPIKE_MEDIAN_FACTOR: u64 = 15;
 const SPIKE_MIN_COUNTS: u64 = 250;
 const SPIKE_FLOOR: u64 = 200;
+const MIN_ROW_DEVICE_FACTOR: f64 = 0.85;
 
 pub struct ClassifiedRow {
     pub kind: RowKind,
@@ -61,19 +62,84 @@ pub fn classify_row(
     ClassifiedRow {
         kind: RowKind::Normal,
         counts: row_counts,
-        interval_secs: capture_interval_secs,
+        interval_secs: effective_interval_secs(
+            device_duration_delta,
+            wall_gap,
+            capture_interval_secs,
+        ),
         status: format!("Capturing row with {row_total} counts."),
     }
 }
 
-pub fn display_count(raw: u32, kind: RowKind, capture_interval_secs: f64) -> u32 {
+pub fn device_timeline_regressed(
+    device_duration_delta: f64,
+    baseline_counts: &[u32],
+    cumulative: &[u32],
+) -> bool {
+    if device_duration_delta < -1.0 {
+        return true;
+    }
+    let baseline_total = channel_total(baseline_counts);
+    let current_total = channel_total(cumulative);
+    baseline_total > 64 && current_total + baseline_total / 20 < baseline_total
+}
+
+fn effective_interval_secs(
+    device_duration_delta: f64,
+    wall_gap: f64,
+    capture_interval_secs: f64,
+) -> f64 {
+    let device_ready = row_interval_ready(device_duration_delta, capture_interval_secs);
+    let interval = if device_ready {
+        device_duration_delta
+    } else {
+        wall_gap
+    };
+    interval.max(0.1).min(capture_interval_secs * 2.0)
+}
+
+fn channel_total(values: &[u32]) -> u64 {
+    values.iter().map(|&value| value as u64).sum()
+}
+
+pub fn row_interval_ready(
+    device_duration_delta: f64,
+    capture_interval_secs: f64,
+) -> bool {
+    device_duration_delta >= capture_interval_secs * MIN_ROW_DEVICE_FACTOR
+}
+
+pub fn display_count(
+    raw: u32,
+    kind: RowKind,
+    target_interval_secs: f64,
+    row_interval_secs: f64,
+) -> u32 {
+    if raw == 0 {
+        return 0;
+    }
     match kind {
-        RowKind::GapRecovery { offline_secs, .. } if offline_secs > 0.0 => {
-            let scale = capture_interval_secs / offline_secs;
+        RowKind::GapRecovery { offline_secs, .. } => {
+            if offline_secs <= 0.0 {
+                return raw;
+            }
+            let scale = target_interval_secs / offline_secs;
             ((raw as f64) * scale).round().max(0.0) as u32
         }
-        _ => raw,
+        RowKind::LiveSpike { .. } => raw,
+        RowKind::Normal => scale_to_target_interval(raw, row_interval_secs, target_interval_secs),
     }
+}
+
+fn scale_to_target_interval(raw: u32, row_interval_secs: f64, target_interval_secs: f64) -> u32 {
+    if row_interval_secs <= 0.0 {
+        return raw;
+    }
+    let scale = target_interval_secs / row_interval_secs;
+    if (scale - 1.0).abs() < 0.05 {
+        return raw;
+    }
+    ((raw as f64) * scale).round().max(0.0) as u32
 }
 
 fn is_live_spike(row_total: u64, recent_row_totals: &[u64]) -> bool {
@@ -159,6 +225,28 @@ mod tests {
     }
 
     #[test]
+    fn device_timeline_regressed_on_duration_drop() {
+        assert!(super::device_timeline_regressed(-10.0, &[100; 4], &[120; 4]));
+    }
+
+    #[test]
+    fn device_timeline_regressed_on_count_drop() {
+        assert!(super::device_timeline_regressed(5.0, &[1000; 4], &[10; 4]));
+    }
+
+    #[test]
+    fn row_interval_ready_requires_capture_window() {
+        assert!(super::row_interval_ready(8.5, 10.0));
+        assert!(!super::row_interval_ready(4.0, 10.0));
+    }
+
+    #[test]
+    fn normal_row_scales_partial_interval() {
+        let scaled = display_count(100, RowKind::Normal, 10.0, 5.0);
+        assert_eq!(scaled, 200);
+    }
+
+    #[test]
     fn gap_display_scales_brightness_down() {
         let raw = 1000;
         let scaled = display_count(
@@ -168,6 +256,7 @@ mod tests {
                 raw_total: 1000,
             },
             5.0,
+            50.0,
         );
         assert!(scaled < raw);
         assert_eq!(scaled, 100);

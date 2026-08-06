@@ -1,11 +1,12 @@
-use radiacode_bluetooth::{DeviceMetadata, DeviceStatus, merge_status, Spectrum};
+use radiacode_core::{DeviceEndpoint, DeviceMetadata, DeviceStatus, merge_status, Spectrum, TransportKind};
 
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub model: String,
     pub serial: String,
     pub firmware: String,
-    pub mac: String,
+    pub transport: TransportKind,
+    pub address: String,
     pub energy_calib: [f32; 3],
     pub battery_percent: Option<f32>,
     pub temperature_c: Option<f32>,
@@ -13,13 +14,18 @@ pub struct DeviceInfo {
 }
 
 impl DeviceInfo {
-    pub fn from_metadata(metadata: DeviceMetadata, mac: &str, status: DeviceStatus) -> Self {
+    pub fn from_metadata(
+        metadata: DeviceMetadata,
+        endpoint: &DeviceEndpoint,
+        status: DeviceStatus,
+    ) -> Self {
         let firmware = metadata.firmware_label();
         Self {
             model: metadata.model,
             serial: metadata.serial,
             firmware,
-            mac: mac.to_string(),
+            transport: endpoint.transport(),
+            address: endpoint.address_label().to_string(),
             energy_calib: metadata.energy_calib,
             battery_percent: status.battery_percent,
             temperature_c: status.temperature_c,
@@ -37,6 +43,13 @@ impl DeviceInfo {
         self.battery_percent = merged.battery_percent;
         self.temperature_c = merged.temperature_c;
         self.rssi_dbm = merged.rssi_dbm;
+    }
+
+    pub fn transport_label(&self) -> &'static str {
+        match self.transport {
+            TransportKind::Bluetooth => "Bluetooth",
+            TransportKind::Usb => "USB",
+        }
     }
 }
 

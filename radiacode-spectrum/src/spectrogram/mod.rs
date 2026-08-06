@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod axes;
 pub mod baseline;
 pub mod color_scheme;

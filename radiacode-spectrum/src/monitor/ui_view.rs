@@ -1,7 +1,7 @@
 use egui::{RichText, Ui, Vec2b};
 use egui_plot::{HoverPosition, Line, Plot, PlotPoints, Points};
 
-use radiacode_bluetooth::{count_unit_label, dose_unit_label};
+use radiacode_core::{count_unit_label, dose_unit_label};
 
 use crate::monitor::plot_bounds::{plot_bounds, series_points, PlotBounds, PlotSeries};
 use crate::monitor::state::{AlarmLevel, MonitorState};
@@ -83,12 +83,13 @@ fn draw_rate_plot(
     unit: &str,
 ) {
     ui.label(RichText::new(title).strong());
+    let bounds = plot_bounds(monitor, series);
+    let window_secs = (bounds.x_max - bounds.x_min).max(0.0);
     ui.label(
-        RichText::new(format!("Last {:.0}s window", 120.0))
+        RichText::new(format!("Last {window_secs:.0}s window"))
             .small()
             .color(MUTED),
     );
-    let bounds = plot_bounds(monitor, series);
     let points = series_points(monitor, series, bounds);
     let unit_label = unit.to_string();
     let series_title = title.to_string();
