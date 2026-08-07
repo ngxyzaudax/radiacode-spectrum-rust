@@ -1,6 +1,6 @@
 # Radiacode (Rust)
 
-Linux-first tooling for [RadiaCode](https://www.radiacode.com/) radiation detectors and spectrometers (RC-10x series). Connect over USB or Bluetooth LE, monitor live readings, capture spectra, and manage device settings from a native desktop app.
+Linux-first tooling for [RadiaCode](https://www.radiacode.com/) radiation detectors and spectrometers (RC-1xx series). Connect over USB or Bluetooth LE, monitor live readings, capture spectra, and manage device settings from a native desktop app.
 
 This project is developed and tested on Linux. USB permissions, Bluetooth pairing, RSSI reporting, and desktop integration all assume a typical Linux stack (udev, BlueZ, D-Bus, X11/Wayland). Other platforms may compile, but they are not supported targets today.
 
