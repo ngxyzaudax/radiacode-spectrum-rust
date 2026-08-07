@@ -70,49 +70,6 @@ sudo udevadm trigger
 
 Unplug and replug the detector after installing the rule.
 
-## Bluetooth on Linux
-
-Wireless connection uses BLE through BlueZ. Pair the detector in your system Bluetooth settings first, then select it in the app’s device list. RSSI is read from BlueZ when available.
-
-## Examples
-
-Low-level transport probes (USB device required; close the Spectrum app first so USB is free):
-
-```bash
-cargo run -p radiacode-usb --example scan
-cargo run -p radiacode-usb --example connect -- <serial-or-usb-id>
-cargo run -p radiacode-usb --example probe_settings
-cargo run -p radiacode-usb --example dump_configuration
-cargo run -p radiacode-usb --example dump_sfr_file
-cargo run -p radiacode-usb --example snapshot_signals -- save before
-cargo run -p radiacode-usb --example snapshot_signals -- diff before after
-```
-
-`snapshot_signals` is a read-only before/after helper for signal and display VirtSFRs (no calibration registers).
-
-## Logging
-
-Set `RUST_LOG` to control verbosity:
-
-```bash
-RUST_LOG=radiacode_spectrum=debug,radiacode_core=info ./target/release/radiacode-spectrum
-```
-
-## Platform notes
-
-| Area | Linux | Other OS |
-| --- | --- | --- |
-| USB hot-plug + udev | Supported | Not integrated |
-| BLE scan/connect | Supported via BlueZ | Untested |
-| RSSI | BlueZ / `btmgmt` | Disabled |
-| Desktop app | Primary target | May build; not validated |
-
-Contributions that improve portability are welcome, but the design priority is a reliable Linux desktop experience.
-
-## Related work
-
-Protocol and register layout follow community reverse-engineering, notably [cdump/radiacode](https://github.com/cdump/radiacode). This codebase is an independent Rust implementation with its own UI and device-management model.
-
 ## License
 
 See [LICENSE](LICENSE).
