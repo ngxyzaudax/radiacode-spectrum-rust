@@ -20,6 +20,8 @@ pub struct SpectrogramSettings {
     pub auto_brightness: bool,
     pub palette: ColorScheme,
     pub newest_at_bottom: bool,
+    #[serde(default)]
+    pub recordings_dir: String,
 }
 
 impl Default for SpectrogramSettings {
@@ -32,6 +34,7 @@ impl Default for SpectrogramSettings {
             auto_brightness: true,
             palette: ColorScheme::Viridis,
             newest_at_bottom: true,
+            recordings_dir: String::new(),
         }
     }
 }

@@ -30,7 +30,7 @@ pub fn start_recording(
     }
     ensure_live_series(&mut cap, spectrum, device_serial, &grid.energies_kev);
     cap.skip_next_sample = true;
-    let dir = ensure_dir().map_err(|error| error.to_string())?;
+    let dir = ensure_dir(&cap.settings.recordings_dir).map_err(|error| error.to_string())?;
     let path = dir.join(timestamp_filename());
     let header = header_from_spectrum(
         spectrum,

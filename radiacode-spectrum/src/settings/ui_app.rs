@@ -3,6 +3,7 @@ use egui::{RichText, Ui};
 use crate::settings::state::SettingsState;
 use crate::settings::ui_layout::toggle_switch;
 use crate::spectrogram::color_scheme::ColorScheme;
+use crate::spectrogram::storage::default_spectrograms_dir;
 use crate::theme::MUTED;
 
 pub fn draw_app_capture(ui: &mut Ui, state: &mut SettingsState) -> bool {
@@ -20,6 +21,7 @@ pub fn draw_app_capture(ui: &mut Ui, state: &mut SettingsState) -> bool {
                 .text("Max samples"),
         )
         .changed();
+    changed |= draw_recordings_dir(ui, state);
     changed |= toggle_switch(ui, &mut state.spectrogram.auto_brightness, "Auto brightness");
     if !state.spectrogram.auto_brightness {
         changed |= ui
@@ -37,6 +39,44 @@ pub fn draw_app_capture(ui: &mut Ui, state: &mut SettingsState) -> bool {
                 .changed();
         }
     });
+    changed
+}
+
+fn draw_recordings_dir(ui: &mut Ui, state: &mut SettingsState) -> bool {
+    let mut changed = false;
+    ui.label(RichText::new("Recordings folder").small().color(MUTED));
+    ui.horizontal(|ui| {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut state.spectrogram.recordings_dir)
+                .desired_width(220.0)
+                .hint_text(default_spectrograms_dir().display().to_string()),
+        );
+        changed |= response.changed();
+        if ui.button("Browse…").clicked() {
+            let start = if state.spectrogram.recordings_dir.trim().is_empty() {
+                default_spectrograms_dir()
+            } else {
+                std::path::PathBuf::from(state.spectrogram.recordings_dir.trim())
+            };
+            if let Some(path) = rfd::FileDialog::new().set_directory(start).pick_folder() {
+                state.spectrogram.recordings_dir = path.display().to_string();
+                changed = true;
+            }
+        }
+        if !state.spectrogram.recordings_dir.is_empty()
+            && ui.button("Default").on_hover_text("Use the app data folder").clicked()
+        {
+            state.spectrogram.recordings_dir.clear();
+            changed = true;
+        }
+    });
+    if state.spectrogram.recordings_dir.trim().is_empty() {
+        ui.label(
+            RichText::new(format!("Using {}", default_spectrograms_dir().display()))
+                .small()
+                .color(MUTED),
+        );
+    }
     changed
 }
 

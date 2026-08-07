@@ -71,7 +71,7 @@ pub fn draw_application_column(
             .color(MUTED),
     );
     ui.add_space(6.0);
-    settings_section(ui, "Spectrogram capture", "Saved locally on this PC.", |ui| {
+    settings_section(ui, "Spectrogram capture", "Interval, library folder, and display.", |ui| {
         if draw_app_capture(ui, state) {
             *action = Some(SettingsAction::SpectrogramChanged);
         }

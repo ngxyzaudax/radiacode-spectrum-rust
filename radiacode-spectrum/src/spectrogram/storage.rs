@@ -17,10 +17,19 @@ const VERSION_V1: u32 = 1;
 const VERSION_V2: u32 = 2;
 const VERSION_CURRENT: u32 = VERSION_V2;
 
-pub fn spectrograms_dir() -> PathBuf {
+pub fn default_spectrograms_dir() -> PathBuf {
     ProjectDirs::from("com", "radiacode", "radiacode-spectrum")
         .map(|dirs| dirs.data_dir().join("spectrograms"))
         .unwrap_or_else(|| PathBuf::from("spectrograms"))
+}
+
+pub fn spectrograms_dir(configured: &str) -> PathBuf {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        default_spectrograms_dir()
+    } else {
+        PathBuf::from(trimmed)
+    }
 }
 
 fn legacy_spectrograms_dir() -> PathBuf {
@@ -29,12 +38,14 @@ fn legacy_spectrograms_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("waterfalls"))
 }
 
-pub fn ensure_dir() -> std::io::Result<PathBuf> {
-    let dir = spectrograms_dir();
+pub fn ensure_dir(configured: &str) -> std::io::Result<PathBuf> {
+    let dir = spectrograms_dir(configured);
     fs::create_dir_all(&dir)?;
-    let legacy = legacy_spectrograms_dir();
-    if legacy.exists() && legacy != dir {
-        migrate_legacy_recordings(&legacy, &dir)?;
+    if configured.trim().is_empty() {
+        let legacy = legacy_spectrograms_dir();
+        if legacy.exists() && legacy != dir {
+            migrate_legacy_recordings(&legacy, &dir)?;
+        }
     }
     Ok(dir)
 }
@@ -68,8 +79,8 @@ pub fn timestamp_filename() -> String {
     )
 }
 
-pub fn list_recordings() -> std::io::Result<Vec<RecordingEntry>> {
-    let dir = ensure_dir()?;
+pub fn list_recordings(configured: &str) -> std::io::Result<Vec<RecordingEntry>> {
+    let dir = ensure_dir(configured)?;
     let mut entries = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;

@@ -46,9 +46,9 @@ pub fn export_rcspg(path: &Path, destination: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-pub fn import_rcspg(source: &Path) -> Result<PathBuf, String> {
+pub fn import_rcspg(source: &Path, recordings_dir: &str) -> Result<PathBuf, String> {
     let series = rcspg::import_recording(source).map_err(|error| error.to_string())?;
-    let dir = ensure_dir().map_err(|error| error.to_string())?;
+    let dir = ensure_dir(recordings_dir).map_err(|error| error.to_string())?;
     let path = dir.join(timestamp_filename());
     write_recording(&path, &series).map_err(|error| error.to_string())?;
     let meta = LibraryMeta {
@@ -66,8 +66,9 @@ pub fn import_rcspg(source: &Path) -> Result<PathBuf, String> {
 pub fn auto_save_snapshot(
     series: &SpectrogramSeries,
     writer: Option<&RecordingWriter>,
+    recordings_dir: &str,
 ) -> std::io::Result<PathBuf> {
-    let dir = spectrograms_dir().join("autosave");
+    let dir = spectrograms_dir(recordings_dir).join("autosave");
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("autosave_{}", timestamp_filename()));
     write_recording(&path, series)?;

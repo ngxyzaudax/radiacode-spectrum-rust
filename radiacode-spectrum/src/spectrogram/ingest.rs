@@ -193,7 +193,11 @@ pub fn maybe_auto_save_capture(capture: &mut SpectrogramCapture) {
     let Some(series) = capture.live_series.as_ref() else {
         return;
     };
-    match library::auto_save_snapshot(series, capture.recording.as_ref()) {
+    match library::auto_save_snapshot(
+        series,
+        capture.recording.as_ref(),
+        &capture.settings.recordings_dir,
+    ) {
         Ok(path) => {
             capture.last_auto_save = Some(Instant::now());
             debug!(path = %path.display(), "spectrogram auto-saved");

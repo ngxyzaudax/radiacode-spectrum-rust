@@ -189,7 +189,7 @@ impl SpectrogramState {
     }
 
     pub fn refresh_history(&mut self) {
-        self.history = list_recordings().unwrap_or_default();
+        self.history = list_recordings(&self.settings.recordings_dir).unwrap_or_default();
     }
 
     pub fn filtered_history(&self) -> Vec<RecordingEntry> {
@@ -291,6 +291,7 @@ impl SpectrogramState {
         if let Ok(mut cap) = self.capture.lock() {
             cap.settings = self.settings.clone();
         }
+        self.refresh_history();
         self.z_range_rows = 0;
         self.texture.dirty = true;
     }

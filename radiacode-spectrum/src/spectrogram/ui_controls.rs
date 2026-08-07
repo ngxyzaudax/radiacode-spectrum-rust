@@ -167,7 +167,7 @@ fn draw_library(
     draw_library_editor(ui, state, action);
     if ui.button("Import .rcspg").clicked() {
         if let Some(path) = rfd::FileDialog::new().add_filter("rcspg", &["rcspg"]).pick_file() {
-            match library::import_rcspg(&path) {
+            match library::import_rcspg(&path, &state.settings.recordings_dir) {
                 Ok(saved) => {
                     state.status = format!("Imported {}", saved.display());
                     state.refresh_history();
