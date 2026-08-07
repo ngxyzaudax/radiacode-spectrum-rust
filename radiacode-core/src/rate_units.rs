@@ -6,14 +6,6 @@ pub fn dose_display_from_rh(dose_rate_rh: f32, dose_unit_sv: bool) -> f32 {
     }
 }
 
-pub fn dose_display_from_ur_h(dose_ur_h: f32, dose_unit_sv: bool) -> f32 {
-    if dose_unit_sv {
-        dose_ur_h / 100.0
-    } else {
-        dose_ur_h
-    }
-}
-
 pub fn count_display_from_cps(count_cps: f32, count_unit_cpm: bool) -> f32 {
     if count_unit_cpm {
         count_cps * 60.0
@@ -84,7 +76,7 @@ pub fn count_unit_label(count_unit_cpm: bool) -> &'static str {
 mod tests {
     use super::{
         count_display_from_cps, decode_count_alarm, decode_dose_alarm, dose_display_from_rh,
-        dose_display_from_ur_h, encode_count_alarm, encode_dose_alarm,
+        encode_count_alarm, encode_dose_alarm,
     };
 
     #[test]
@@ -124,12 +116,6 @@ mod tests {
         let rh = 0.000_125;
         assert!((dose_display_from_rh(rh, true) - 1.25).abs() < 0.001);
         assert!((dose_display_from_rh(rh, false) - 125.0).abs() < 0.1);
-    }
-
-    #[test]
-    fn vsfr_dose_conversions() {
-        assert!((dose_display_from_ur_h(125.0, true) - 1.25).abs() < 0.001);
-        assert!((dose_display_from_ur_h(125.0, false) - 125.0).abs() < 0.001);
     }
 
     #[test]

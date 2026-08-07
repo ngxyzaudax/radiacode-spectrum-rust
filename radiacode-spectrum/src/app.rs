@@ -6,6 +6,8 @@ use egui::{CentralPanel, Context, Panel, Ui, ViewportCommand, ViewportId};
 use radiacode_core::{merge_discovered, resolve_usb_endpoint, DeviceEndpoint, TransportKind};
 use tracing::{debug, info, warn};
 
+use crate::about::draw_about_view;
+use crate::analysis::{draw_analysis_controls, draw_analysis_view, AnalysisAction, AnalysisState};
 use crate::dosimeter::{draw_dosimeter_controls, draw_dosimeter_view, DosimeterAction};
 use crate::events::AppState;
 use crate::icon::app_icon;
@@ -21,7 +23,7 @@ use crate::spectrogram::SpectrogramState;
 use crate::theme;
 use crate::ui_controls::{draw_spectrum_controls, ControlsAction, ControlsProps};
 use crate::ui_device::{draw_device_panel, DeviceAction, DevicePanelProps};
-use crate::ui_disconnected::{draw_disconnected_view, shows_tab_content};
+use crate::ui_disconnected::{draw_disconnected_view, shows_tab_content, tab_works_offline};
 use crate::ui_plot::draw_spectrum_plot;
 use crate::usb_access::{
     draw_usb_access_dialog, usb_access_required, UsbAccessAction, UsbAccessOutcome, UsbAccessPrompt,
@@ -34,6 +36,7 @@ pub struct SpectrumApp {
     state: AppState,
     settings: SettingsState,
     spectrogram: SpectrogramState,
+    analysis: AnalysisState,
     active_tab: ViewTab,
     previous_tab: ViewTab,
     y_scale: YScale,
@@ -55,11 +58,14 @@ impl SpectrumApp {
         spectrogram.settings = settings.spectrogram.clone();
         spectrogram.on_settings_changed();
         spectrogram.refresh_history();
+        let mut analysis = AnalysisState::new();
+        analysis.refresh_library(&settings.spectrogram.recordings_dir);
         Self {
             worker: spawn_worker(capture),
             state: AppState::new(),
             settings,
             spectrogram,
+            analysis,
             active_tab: ViewTab::Monitor,
             previous_tab: ViewTab::Monitor,
             y_scale: YScale::Linear,
@@ -345,6 +351,12 @@ impl SpectrumApp {
         }
     }
 
+    fn handle_analysis_action(&mut self, action: AnalysisAction) {
+        if matches!(action, AnalysisAction::ClearSelection) {
+            self.analysis.clear_selection();
+        }
+    }
+
     fn handle_settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::LoadDevice => {
@@ -381,6 +393,8 @@ impl SpectrumApp {
                 self.settings
                     .apply_spectrogram_to(&mut self.spectrogram.settings);
                 self.spectrogram.on_settings_changed();
+                self.analysis
+                    .refresh_library(&self.spectrogram.settings.recordings_dir);
                 self.sync_capture_interval();
             }
         }
@@ -441,6 +455,16 @@ impl SpectrumApp {
                     self.spectrogram.status = message;
                 }
             }
+            SpectrogramControlsAction::PauseCapture => {
+                if let Err(message) = self.spectrogram.pause_capture() {
+                    self.spectrogram.status = message;
+                }
+            }
+            SpectrogramControlsAction::ResumeCapture => {
+                if let Err(message) = self.spectrogram.resume_capture() {
+                    self.spectrogram.status = message;
+                }
+            }
             SpectrogramControlsAction::ResumeRecording => {
                 let serial = self
                     .state
@@ -456,7 +480,12 @@ impl SpectrumApp {
             }
             SpectrogramControlsAction::CloseLoaded => self.spectrogram.close_loaded(),
             SpectrogramControlsAction::Load(path) => self.spectrogram.request_load(path),
-            SpectrogramControlsAction::SettingsChanged => {}
+            SpectrogramControlsAction::SettingsChanged => {
+                self.spectrogram.persist_settings();
+                self.settings.spectrogram = self.spectrogram.settings.clone();
+                self.spectrogram.on_settings_changed();
+                self.sync_capture_interval();
+            }
             SpectrogramControlsAction::LibraryChanged => {}
         }
     }
@@ -466,6 +495,11 @@ impl SpectrumApp {
     fn enter_spectrogram_tab(&mut self) {
         info!("entered spectrogram tab");
         self.spectrogram.on_tab_enter();
+    }
+
+    fn enter_analysis_tab(&mut self) {
+        self.analysis
+            .refresh_library(&self.spectrogram.settings.recordings_dir);
     }
 
     fn poll_usb_access(&mut self) {
@@ -580,7 +614,7 @@ impl App for SpectrumApp {
                     self.handle_device_action(action);
                 }
 
-                if shows_tab_content(self.state.connection) {
+                if shows_tab_content(self.state.connection) || tab_works_offline(self.active_tab) {
                     match self.active_tab {
                         ViewTab::Monitor => draw_monitor_controls(ui),
                         ViewTab::Spectrum => {
@@ -600,7 +634,6 @@ impl App for SpectrumApp {
                                 ui,
                                 &mut self.spectrogram,
                                 self.state.connection,
-                                self.state.busy,
                             ) {
                                 self.handle_spectrogram_action(action);
                             }
@@ -610,7 +643,17 @@ impl App for SpectrumApp {
                                 self.handle_dosimeter_action(action);
                             }
                         }
+                        ViewTab::Analysis => {
+                            if let Some(action) = draw_analysis_controls(
+                                ui,
+                                &mut self.analysis,
+                                &mut self.y_scale,
+                            ) {
+                                self.handle_analysis_action(action);
+                            }
+                        }
                         ViewTab::Settings => {}
+                        ViewTab::About => {}
                     }
                 }
             });
@@ -640,8 +683,18 @@ impl App for SpectrumApp {
                 );
                 ui.selectable_value(
                     &mut self.active_tab,
+                    ViewTab::Analysis,
+                    ViewTab::Analysis.label(),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
                     ViewTab::Settings,
                     ViewTab::Settings.label(),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    ViewTab::About,
+                    ViewTab::About.label(),
                 );
             });
             if self.active_tab == ViewTab::Spectrum && previous_tab != ViewTab::Spectrum {
@@ -649,6 +702,9 @@ impl App for SpectrumApp {
             }
             if self.active_tab == ViewTab::Spectrogram && previous_tab != ViewTab::Spectrogram {
                 self.enter_spectrogram_tab();
+            }
+            if self.active_tab == ViewTab::Analysis && previous_tab != ViewTab::Analysis {
+                self.enter_analysis_tab();
             }
             if self.active_tab == ViewTab::Settings && previous_tab != ViewTab::Settings {
                 self.enter_settings_tab();
@@ -664,9 +720,22 @@ impl App for SpectrumApp {
                         &mut self.settings,
                         self.state.connection,
                         self.state.device_info.as_ref(),
+                        self.spectrogram.is_recording(),
                     ) {
                         self.handle_settings_action(action);
                     }
+                });
+            } else if self.active_tab == ViewTab::About {
+                let content_rect = ui.available_rect_before_wrap();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                    ui.set_clip_rect(content_rect);
+                    draw_about_view(ui);
+                });
+            } else if self.active_tab == ViewTab::Analysis {
+                let content_rect = ui.available_rect_before_wrap();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                    ui.set_clip_rect(content_rect);
+                    draw_analysis_view(ui, &self.analysis, self.y_scale);
                 });
             } else if shows_tab_content(self.state.connection) {
                 let content_rect = ui.available_rect_before_wrap();
@@ -688,7 +757,7 @@ impl App for SpectrumApp {
                         ViewTab::Dosimeter => {
                             draw_dosimeter_view(ui, &self.state.dosimeter);
                         }
-                        ViewTab::Settings => {}
+                        ViewTab::Analysis | ViewTab::Settings | ViewTab::About => {}
                     }
                 });
             } else {

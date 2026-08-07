@@ -2,14 +2,6 @@ use egui::Color32;
 
 use crate::spectrogram::color_scheme::ColorScheme;
 
-pub fn count_to_color(value: f32, max_value: f32, scheme: ColorScheme) -> Color32 {
-    if max_value <= 0.0 || value <= 0.0 {
-        return Color32::from_rgb(8, 10, 16);
-    }
-    let t = (value / max_value).clamp(0.0, 1.0);
-    color_from_t(t, scheme)
-}
-
 pub fn normalized_to_color(t: f32, scheme: ColorScheme) -> Color32 {
     color_from_t(t.clamp(0.0, 1.0), scheme)
 }
@@ -83,14 +75,14 @@ pub fn percentile_peak(values: &[u32], percentile: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_to_color, percentile_peak};
+    use super::{normalized_to_color, percentile_peak};
     use crate::spectrogram::color_scheme::ColorScheme;
 
     #[test]
-    fn zero_is_dark() {
-        assert_eq!(
-            count_to_color(0.0, 10.0, ColorScheme::Viridis),
-            egui::Color32::from_rgb(8, 10, 16)
+    fn normalized_endpoints_differ() {
+        assert_ne!(
+            normalized_to_color(0.0, ColorScheme::Viridis),
+            normalized_to_color(1.0, ColorScheme::Viridis)
         );
     }
 

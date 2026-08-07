@@ -63,6 +63,7 @@ pub fn draw_detector_column(
 pub fn draw_application_column(
     ui: &mut Ui,
     state: &mut SettingsState,
+    recording: bool,
     action: &mut Option<SettingsAction>,
 ) {
     ui.label(
@@ -72,7 +73,7 @@ pub fn draw_application_column(
     );
     ui.add_space(6.0);
     settings_section(ui, "Spectrogram capture", "Interval, library folder, and display.", |ui| {
-        if draw_app_capture(ui, state) {
+        if draw_app_capture(ui, state, recording) {
             *action = Some(SettingsAction::SpectrogramChanged);
         }
     });

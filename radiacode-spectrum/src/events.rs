@@ -214,15 +214,6 @@ impl AppState {
         enabled && connected && due && !self.spectrum_fetch_pending
     }
 
-    pub fn monitor_refresh_due(&self, enabled: bool, interval_secs: u64) -> bool {
-        let connected = self.connection == ConnectionState::Connected;
-        let due = self
-            .last_monitor_fetch
-            .map(|t| t.elapsed() >= Duration::from_secs(interval_secs.max(1)))
-            .unwrap_or(true);
-        enabled && connected && due && !self.monitor_fetch_pending
-    }
-
     pub fn try_schedule_spectrum(&mut self) -> bool {
         if self.spectrum_fetch_pending {
             return false;

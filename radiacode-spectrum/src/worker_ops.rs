@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use radiacode_bluetooth::{scan_radiacode_devices, BleError};
 use radiacode_core::{
-    merge_discovered, merge_status, AlarmLimits, AlarmLimitsUpdate, DeviceConfig, DeviceEndpoint,
-    DeviceStatus, DiscoveredDevice, Error, RadiaCode, SessionRestore, Spectrum,
+    merge_discovered, merge_status, AlarmLimits, DeviceConfig, DeviceEndpoint, DeviceStatus,
+    DiscoveredDevice, Error, RadiaCode, SessionRestore, Spectrum,
 };
 use radiacode_usb::scan_usb_devices;
 use tracing::{debug, error, info, warn};
@@ -465,57 +465,6 @@ pub async fn handle_monitor(
             let _ = events.send(WorkerEvent::MonitorPollComplete);
             Some(device)
         }
-        Err(error) => {
-            handle_device_error(
-                events,
-                device,
-                session_endpoint,
-                error,
-                session,
-                link_status,
-                session_restore,
-            )
-            .await
-        }
-    }
-}
-
-pub async fn handle_set_alarm_limits(
-    events: &Sender<WorkerEvent>,
-    device: Option<RadiaCode>,
-    session_endpoint: Option<&DeviceEndpoint>,
-    update: AlarmLimitsUpdate,
-    alarm_limits: &mut Option<AlarmLimits>,
-    session: &SessionEpoch,
-    link_status: &mut DeviceStatus,
-    session_restore: &Option<SessionRestore>,
-) -> Option<RadiaCode> {
-    let Some(mut device) = device else {
-        warn!("alarm update skipped: no active device");
-        return None;
-    };
-    match device.set_alarm_limits(&update).await {
-        Ok(()) => match device.alarm_limits().await {
-            Ok(limits) => {
-                if session.active() {
-                    *alarm_limits = Some(limits);
-                    let _ = events.send(WorkerEvent::AlarmLimits(limits));
-                }
-                Some(device)
-            }
-            Err(error) => {
-                handle_device_error(
-                    events,
-                    device,
-                    session_endpoint,
-                    error,
-                    session,
-                    link_status,
-                    session_restore,
-                )
-                .await
-            }
-        },
         Err(error) => {
             handle_device_error(
                 events,

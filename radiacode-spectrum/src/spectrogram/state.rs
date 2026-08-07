@@ -1,20 +1,16 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use crate::energy::energy_grid;
 use crate::model::SpectrumView;
-use crate::view_tab::ViewTab;
 use crate::spectrogram::baseline::IngestBaseline;
 use crate::spectrogram::capture::SpectrogramCapture;
-use crate::spectrogram::ingest;
-use crate::spectrogram::model::{
-    RecordingEntry, SpectrogramDisplay, SpectrogramHeader, SpectrogramSeries,
-};
+use crate::spectrogram::model::{RecordingEntry, SpectrogramDisplay, SpectrogramSeries};
+use crate::spectrogram::library_meta::load_meta;
 use crate::spectrogram::recording;
 use crate::spectrogram::settings::{load_settings, save_settings, SpectrogramSettings};
-use crate::spectrogram::storage::{header_now, list_recordings};
+use crate::spectrogram::storage::list_recordings;
 use crate::spectrogram::texture::SpectrogramTexture;
 use crate::spectrogram::view_range::SpectrogramViewRange;
 use crate::spectrogram::zscale::{compute_series_z_range, ZScaleRange};
@@ -24,6 +20,7 @@ pub struct SpectrogramState {
     pub display: SpectrogramDisplay,
     pub live_series: Option<SpectrogramSeries>,
     pub loaded_series: Option<SpectrogramSeries>,
+    pub loaded_path: Option<PathBuf>,
     pub paused_recording_path: Option<PathBuf>,
     pub history: Vec<RecordingEntry>,
     pub library_filter: String,
@@ -60,6 +57,7 @@ impl SpectrogramState {
             display: SpectrogramDisplay::Live,
             live_series: None,
             loaded_series: None,
+            loaded_path: None,
             paused_recording_path: None,
             history: Vec::new(),
             library_filter: String::new(),
@@ -132,10 +130,6 @@ impl SpectrogramState {
         self.sync_from_capture();
     }
 
-    pub fn on_session_connect(&mut self) {
-        self.sync_from_capture();
-    }
-
     pub fn on_tab_enter(&mut self) {
         if self.live_series.is_some() {
             self.texture.dirty = true;
@@ -146,27 +140,9 @@ impl SpectrogramState {
         self.status = "Waiting for first fresh spectrum sample.".into();
     }
 
-    pub fn reset_live_capture(&mut self) {
-        if let Ok(mut cap) = self.capture.lock() {
-            cap.on_disconnect();
-        }
-        self.live_series = None;
-        self.display = SpectrogramDisplay::Live;
-        self.loaded_series = None;
-        self.last_ingested_sequence = 0;
-        self.skip_next_sample = false;
-        self.reconnect_baseline_pending = false;
-        self.last_ingest_at = None;
-        self.baseline = None;
-        self.last_auto_save = None;
-        self.z_range = None;
-        self.z_range_rows = 0;
-        self.view_range.reset();
-        self.mark_texture_dirty_empty();
-    }
-
     pub fn close_loaded(&mut self) {
         self.loaded_series = None;
+        self.loaded_path = None;
         self.display = SpectrogramDisplay::Live;
         self.z_range_rows = 0;
         self.texture.dirty = true;
@@ -213,21 +189,29 @@ impl SpectrogramState {
             .collect()
     }
 
-    pub fn should_capture(&self, _active_tab: ViewTab) -> bool {
-        self.is_recording() || self.capture_enabled
-    }
-
-    pub fn is_capturing(&self) -> bool {
-        self.is_recording() || self.capture_enabled
-    }
-
-    pub fn is_viewing_library(&self) -> bool {
-        self.display == SpectrogramDisplay::Loaded
-    }
-
     pub fn persist_settings(&mut self) {
         self.settings.clamp();
         let _ = save_settings(&self.settings);
+    }
+
+    pub fn is_capture_paused(&self) -> bool {
+        !self.capture_enabled
+    }
+
+    pub fn can_resume_append(&self) -> bool {
+        !self.is_recording() && self.paused_recording_path.is_some()
+    }
+
+    pub fn pause_capture(&mut self) -> Result<(), String> {
+        let result = recording::pause_capture(self);
+        self.sync_from_capture();
+        result
+    }
+
+    pub fn resume_capture(&mut self) -> Result<(), String> {
+        let result = recording::resume_capture(self);
+        self.sync_from_capture();
+        result
     }
 
     pub fn start_recording(
@@ -243,7 +227,31 @@ impl SpectrogramState {
     pub fn stop_recording(&mut self) -> Result<(), String> {
         let result = recording::stop_recording(self);
         self.sync_from_capture();
+        if result.is_ok() {
+            if let Some(path) = self.paused_recording_path.clone() {
+                self.open_library_editor(&path);
+            }
+        }
         result
+    }
+
+    pub fn open_library_editor(&mut self, path: &Path) {
+        let fallback = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("recording");
+        let (name, comment) = self
+            .history
+            .iter()
+            .find(|entry| entry.path == path)
+            .map(|entry| (entry.name.clone(), entry.comment.clone()))
+            .unwrap_or_else(|| {
+                let meta = load_meta(path, fallback);
+                (meta.name, meta.comment)
+            });
+        self.library_edit_path = Some(path.to_path_buf());
+        self.library_edit_name = name;
+        self.library_edit_comment = comment;
     }
 
     pub fn resume_recording(
@@ -268,6 +276,7 @@ impl SpectrogramState {
         self.live_series = None;
         self.display = SpectrogramDisplay::Live;
         self.loaded_series = None;
+        self.loaded_path = None;
         self.last_ingested_sequence = 0;
         self.skip_next_sample = false;
         self.reconnect_baseline_pending = false;
@@ -281,19 +290,48 @@ impl SpectrogramState {
         self.mark_texture_dirty_empty();
     }
 
-    pub fn resync_baseline(&mut self) {
-        self.on_reconnect();
-    }
-
     pub fn on_settings_changed(&mut self) {
         self.settings.clamp();
+        let previous_interval = self
+            .capture
+            .lock()
+            .ok()
+            .map(|cap| cap.settings.capture_interval_secs)
+            .unwrap_or(self.settings.capture_interval_secs);
+        let interval_changed =
+            (previous_interval - self.settings.capture_interval_secs).abs() > 1e-9;
         self.persist_settings();
         if let Ok(mut cap) = self.capture.lock() {
             cap.settings = self.settings.clone();
         }
+        if interval_changed {
+            self.reset_accumulation();
+            self.apply_capture_interval_to_live_header();
+            if let Ok(mut cap) = self.capture.lock() {
+                cap.status = format!(
+                    "Capture interval set to {:.0}s. Accumulation reset.",
+                    self.settings.capture_interval_secs
+                );
+                cap.mark_dirty();
+            }
+            self.sync_from_capture();
+        }
         self.refresh_history();
         self.z_range_rows = 0;
         self.texture.dirty = true;
+    }
+
+    fn apply_capture_interval_to_live_header(&mut self) {
+        let interval = self.settings.capture_interval_secs;
+        if let Ok(mut cap) = self.capture.lock() {
+            if let Some(series) = cap.live_series.as_mut() {
+                series.header.interval_secs = interval;
+            }
+            cap.mark_dirty();
+        }
+        if let Some(series) = self.live_series.as_mut() {
+            series.header.interval_secs = interval;
+        }
     }
 
     pub fn refresh_z_range(&mut self) {
@@ -323,19 +361,27 @@ impl SpectrogramState {
         if self.display == SpectrogramDisplay::Loaded {
             self.close_loaded();
         }
-        if let Some(series) = self.live_series.as_mut() {
-            series.rows.clear();
+        if let Ok(mut cap) = self.capture.lock() {
+            if let Some(series) = cap.live_series.as_mut() {
+                series.rows.clear();
+            }
+            cap.baseline = None;
+            cap.skip_next_sample = true;
+            cap.reconnect_baseline_pending = false;
+            cap.last_ingest_at = None;
+            cap.last_ingested_sequence = 0;
+            cap.status = "Accumulation cleared. Waiting for next spectrum sample.".into();
+            cap.mark_dirty();
+        }
+        self.sync_from_capture();
+        if let Some(series) = self.live_series.as_ref() {
             self.view_range.fit_series_energy(&series.energies_kev);
         } else {
             self.view_range.reset();
         }
-        self.baseline = None;
-        self.skip_next_sample = true;
-        self.last_ingest_at = None;
-        self.last_ingested_sequence = 0;
+        self.z_range = None;
         self.z_range_rows = 0;
         self.mark_texture_dirty_empty();
-        self.status = "Accumulation cleared. Waiting for next spectrum sample.".into();
     }
 
     pub fn reset_view(&mut self) {
@@ -350,41 +396,14 @@ impl SpectrogramState {
         self.texture.dirty = true;
     }
 
+    #[cfg(test)]
     pub fn ingest_spectrum(
         &mut self,
         spectrum: &SpectrumView,
         device_serial: Option<&str>,
         sequence: u64,
-        active_tab: ViewTab,
     ) {
-        ingest::ingest_spectrum(self, spectrum, device_serial, sequence, active_tab);
-    }
-
-    pub fn maybe_auto_save(&mut self) {
-        if let Ok(mut cap) = self.capture.lock() {
-            cap.maybe_auto_save();
-        }
-        self.sync_from_capture();
-    }
-
-    pub(crate) fn ensure_live_series(
-        &mut self,
-        spectrum: &SpectrumView,
-        device_serial: Option<&str>,
-        energies_kev: &[f64],
-    ) {
-        if self.live_series.is_some() {
-            return;
-        }
-        let header = header_from_spectrum(
-            spectrum,
-            device_serial,
-            energies_kev.len() as u32,
-            self.settings.capture_interval(),
-        );
-        self.live_series = Some(SpectrogramSeries::new(header, energies_kev.to_vec()));
-        self.view_range.fit_series_energy(energies_kev);
-        self.baseline = None;
+        crate::spectrogram::ingest::ingest_spectrum(self, spectrum, device_serial, sequence);
     }
 
     fn mark_texture_dirty_empty(&mut self) {
@@ -394,24 +413,6 @@ impl SpectrogramState {
     }
 }
 
-fn header_from_spectrum(
-    spectrum: &SpectrumView,
-    device_serial: Option<&str>,
-    channel_count: u32,
-    interval_secs: f64,
-) -> SpectrogramHeader {
-    let grid = energy_grid(spectrum);
-    header_now(
-        spectrum.a0,
-        spectrum.a1,
-        spectrum.a2,
-        channel_count,
-        interval_secs,
-        device_serial.map(str::to_string),
-        grid.energies_kev,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -419,7 +420,6 @@ mod tests {
 
     use crate::model::SpectrumView;
     use crate::spectrogram::capture::SpectrogramCapture;
-    use crate::view_tab::ViewTab;
     use crate::spectrogram::state::SpectrogramState;
 
     fn test_state() -> SpectrogramState {
@@ -450,9 +450,9 @@ mod tests {
         if let Ok(mut cap) = state.capture.lock() {
             cap.settings.capture_interval_secs = 10.0;
         }
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
         assert_eq!(state.live_row_count(), 0);
-        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2);
         assert_eq!(state.live_row_count(), 1);
         assert_eq!(state.live_series.as_ref().unwrap().rows[0].counts[0], 10);
     }
@@ -464,12 +464,12 @@ mod tests {
         if let Ok(mut cap) = state.capture.lock() {
             cap.settings.capture_interval_secs = 10.0;
         }
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
+        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2);
         assert_eq!(state.live_row_count(), 1);
         state.on_tab_enter();
         assert_eq!(state.live_row_count(), 1);
-        state.ingest_spectrum(&sample_spectrum(35, 25), None, 3, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(35, 25), None, 3);
         assert_eq!(state.live_row_count(), 2);
     }
 }

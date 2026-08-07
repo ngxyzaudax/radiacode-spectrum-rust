@@ -1,3 +1,5 @@
+mod about;
+mod analysis;
 mod dosimeter;
 mod app;
 mod app_config;
@@ -18,6 +20,8 @@ mod ui_device;
 mod ui_device_status;
 mod ui_disconnected;
 mod ui_plot;
+mod ui_recording_library;
+mod ui_recording_search;
 mod usb_access;
 mod view_tab;
 mod worker;

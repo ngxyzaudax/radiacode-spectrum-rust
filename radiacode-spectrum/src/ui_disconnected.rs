@@ -19,3 +19,12 @@ pub fn draw_disconnected_view(ui: &mut Ui, connection: ConnectionState) {
 pub fn shows_tab_content(connection: ConnectionState) -> bool {
     connection == ConnectionState::Connected
 }
+
+pub fn tab_works_offline(tab: crate::view_tab::ViewTab) -> bool {
+    matches!(
+        tab,
+        crate::view_tab::ViewTab::Settings
+            | crate::view_tab::ViewTab::Analysis
+            | crate::view_tab::ViewTab::About
+    )
+}

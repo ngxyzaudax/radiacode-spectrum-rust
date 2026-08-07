@@ -3,7 +3,7 @@ name = "radiacode-core"
 version = "0.1.0"
 edition = "2024"
 description = "Shared protocol and device client for RadiaCode radiation detectors"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 async-trait = "0.1"

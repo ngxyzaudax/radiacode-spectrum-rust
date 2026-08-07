@@ -9,8 +9,6 @@ use crate::spectrogram::capture::SpectrogramCapture;
 use crate::spectrogram::gap::{self, classify_row, ClassifiedRow};
 use crate::spectrogram::library;
 use crate::spectrogram::model::SpectrogramSeries;
-use crate::spectrogram::state::SpectrogramState;
-use crate::view_tab::ViewTab;
 
 pub fn ingest_capture(capture: &mut SpectrogramCapture, spectrum: &SpectrumView, sequence: u64) {
     if sequence <= capture.last_ingested_sequence {
@@ -206,14 +204,13 @@ pub fn maybe_auto_save_capture(capture: &mut SpectrogramCapture) {
     }
 }
 
+#[cfg(test)]
 pub fn ingest_spectrum(
-    state: &mut SpectrogramState,
+    state: &mut crate::spectrogram::state::SpectrogramState,
     spectrum: &SpectrumView,
     device_serial: Option<&str>,
     sequence: u64,
-    active_tab: ViewTab,
 ) {
-    let _ = (device_serial, active_tab);
     if sequence == state.last_ingested_sequence {
         return;
     }

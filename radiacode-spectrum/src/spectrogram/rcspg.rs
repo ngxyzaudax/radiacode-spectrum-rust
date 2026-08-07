@@ -111,7 +111,6 @@ pub fn import_recording(path: &Path) -> std::io::Result<SpectrogramSeries> {
 }
 
 struct HistoricalSpectrum {
-    duration: u32,
     calibration: [f32; 3],
     counts: Vec<u32>,
 }
@@ -163,7 +162,7 @@ fn decode_historical_spectrum(line: &str) -> std::io::Result<HistoricalSpectrum>
     if bytes.len() < 16 {
         return Err(invalid("spectrum line too short"));
     }
-    let duration = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let _duration = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let calibration = [
         f32::from_le_bytes(bytes[4..8].try_into().unwrap()),
         f32::from_le_bytes(bytes[8..12].try_into().unwrap()),
@@ -174,7 +173,6 @@ fn decode_historical_spectrum(line: &str) -> std::io::Result<HistoricalSpectrum>
         .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
     Ok(HistoricalSpectrum {
-        duration,
         calibration,
         counts,
     })

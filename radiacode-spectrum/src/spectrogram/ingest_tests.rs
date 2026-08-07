@@ -7,7 +7,6 @@ mod tests {
     use crate::spectrogram::capture::SpectrogramCapture;
     use crate::spectrogram::model::RowKind;
     use crate::spectrogram::state::SpectrogramState;
-    use crate::view_tab::ViewTab;
 
     fn test_state() -> SpectrogramState {
         let capture = Arc::new(Mutex::new(SpectrogramCapture::new()));
@@ -35,14 +34,14 @@ mod tests {
     #[test]
     fn reconnect_baseline_then_normal_row() {
         let mut state = test_state();
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
+        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2);
         assert_eq!(state.live_row_count(), 1);
 
         state.on_reconnect();
-        state.ingest_spectrum(&sample_spectrum(5000, 60), None, 3, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(5000, 60), None, 3);
         assert_eq!(state.live_row_count(), 1);
-        state.ingest_spectrum(&sample_spectrum(5010, 65), None, 4, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(5010, 65), None, 4);
         assert_eq!(state.live_row_count(), 2);
         assert!(matches!(
             state.live_series.as_ref().unwrap().rows[1].kind,
@@ -57,35 +56,35 @@ mod tests {
         if let Ok(mut cap) = state.capture.lock() {
             cap.settings.capture_interval_secs = 10.0;
         }
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
+        state.ingest_spectrum(&sample_spectrum(20, 15), None, 2);
         assert_eq!(state.live_row_count(), 1);
-        state.ingest_spectrum(&sample_spectrum(30, 17240), None, 3, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(30, 17240), None, 3);
         assert_eq!(state.live_row_count(), 2);
-        state.ingest_spectrum(&sample_spectrum(40, 1001), None, 4, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(40, 1001), None, 4);
         assert_eq!(state.live_row_count(), 2);
-        state.ingest_spectrum(&sample_spectrum(50, 1011), None, 5, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(50, 1011), None, 5);
         assert_eq!(state.live_row_count(), 3);
     }
 
     #[test]
     fn short_interval_skips_row_append() {
         let mut state = test_state();
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
+        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2);
         assert_eq!(state.live_row_count(), 1);
-        state.ingest_spectrum(&sample_spectrum(25, 12), None, 3, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(25, 12), None, 3);
         assert_eq!(state.live_row_count(), 1);
-        state.ingest_spectrum(&sample_spectrum(35, 20), None, 4, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(35, 20), None, 4);
         assert_eq!(state.live_row_count(), 2);
     }
 
     #[test]
     fn long_gap_produces_gap_recovery_row() {
         let mut state = test_state();
-        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2, ViewTab::Monitor);
-        state.ingest_spectrum(&sample_spectrum(2000, 55), None, 3, ViewTab::Monitor);
+        state.ingest_spectrum(&sample_spectrum(10, 5), None, 1);
+        state.ingest_spectrum(&sample_spectrum(20, 10), None, 2);
+        state.ingest_spectrum(&sample_spectrum(2000, 55), None, 3);
         assert_eq!(state.live_row_count(), 2);
         assert!(matches!(
             state.live_series.as_ref().unwrap().rows[1].kind,

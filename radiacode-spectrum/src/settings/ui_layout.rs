@@ -64,23 +64,3 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
     });
     changed
 }
-
-pub fn toggle_labeled_row(ui: &mut Ui, on: &mut bool, label: &str, label_width: f32) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
-        ui.allocate_ui_with_layout(
-            Vec2::new(label_width, ui.spacing().interact_size.y),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(RichText::new(label).color(if *on {
-                    ui.visuals().text_color()
-                } else {
-                    MUTED
-                }));
-            },
-        );
-        changed |= toggle_knob(ui, on);
-    });
-    changed
-}

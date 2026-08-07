@@ -11,6 +11,7 @@ pub fn draw_settings_view(
     state: &mut SettingsState,
     connection: ConnectionState,
     device_info: Option<&DeviceInfo>,
+    recording: bool,
 ) -> Option<SettingsAction> {
     let connected = connection == ConnectionState::Connected;
     let editing = state.device_op == SettingsDeviceOp::Idle;
@@ -42,7 +43,7 @@ pub fn draw_settings_view(
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.add_space(4.0);
-                    draw_application_column(ui, state, &mut action);
+                    draw_application_column(ui, state, recording, &mut action);
                 });
         });
     action

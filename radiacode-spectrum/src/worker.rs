@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use radiacode_core::{
-    AlarmLimits, AlarmLimitsUpdate, DeviceConfig, DeviceEndpoint, DeviceStatus, DiscoveredDevice,
-    MonitorPollSample, RadiaCode, SessionRestore,
+    AlarmLimits, DeviceConfig, DeviceEndpoint, DeviceStatus, DiscoveredDevice, MonitorPollSample,
+    RadiaCode, SessionRestore,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, MissedTickBehavior};
@@ -15,8 +15,7 @@ use crate::model::{DeviceInfo, SpectrumView};
 use crate::spectrogram::capture::{spawn_capture_router, SpectrogramCapture};
 use crate::worker_ops::{
     handle_apply_device_config, handle_connect, handle_disconnect, handle_fetch_device_config,
-    handle_monitor, handle_reset, handle_scan, handle_set_alarm_limits, handle_spectrum,
-    handle_dose_reset,
+    handle_monitor, handle_reset, handle_scan, handle_spectrum, handle_dose_reset,
     handle_sync_device_clock, SessionEpoch,
 };
 
@@ -32,7 +31,6 @@ pub enum WorkerCommand {
     ResetSpectrum,
     ResetDose,
     FetchMonitor,
-    SetAlarmLimits(AlarmLimitsUpdate),
     SetCaptureInterval(f64),
     SetMonitorPollInterval(u64),
     FetchDeviceConfig,
@@ -454,26 +452,6 @@ async fn run_command(
                 *session_endpoint = None;
                 *alarm_limits = None;
                 *monitor_polls = 0;
-                *session_restore = None;
-            }
-        }
-        WorkerCommand::SetAlarmLimits(update) => {
-            *device = handle_set_alarm_limits(
-                events,
-                device.take(),
-                session_endpoint.as_ref(),
-                update,
-                alarm_limits,
-                &session,
-                link_status,
-                session_restore,
-            )
-            .await;
-            if device.is_none() {
-                *session_endpoint = None;
-                *alarm_limits = None;
-                *monitor_polls = 0;
-                *link_status = DeviceStatus::default();
                 *session_restore = None;
             }
         }

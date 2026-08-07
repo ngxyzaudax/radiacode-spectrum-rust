@@ -3,7 +3,7 @@ name = "radiacode-usb"
 version = "0.1.0"
 edition = "2024"
 description = "USB transport for RadiaCode radiation detectors"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 async-trait = "0.1"

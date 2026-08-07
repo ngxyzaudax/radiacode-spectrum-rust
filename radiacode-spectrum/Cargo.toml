@@ -3,7 +3,7 @@ name = "radiacode-spectrum"
 version = "0.1.0"
 edition = "2024"
 description = "Spectrum analysis program for RadiaCode detectors"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 eframe = "0.35"

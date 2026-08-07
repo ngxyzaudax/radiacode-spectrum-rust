@@ -15,29 +15,22 @@ pub fn draw_dosimeter_controls(ui: &mut Ui) -> Option<DosimeterAction> {
     );
     ui.add_space(8.0);
     let confirm_id = ui.id().with("dose_reset_confirm");
-    let mut confirm = ui.data_mut(|data| *data.get_temp_mut_or(confirm_id, false));
-    if confirm {
+    let confirming = ui.data_mut(|data| *data.get_temp_mut_or(confirm_id, false));
+    if confirming {
         ui.label("Reset accumulated dose on device?");
-        let mut reset = false;
-        let mut cancel = false;
+        let mut action = None;
         ui.horizontal(|ui| {
-            reset = ui.button("Confirm reset").clicked();
-            cancel = ui.button("Cancel").clicked();
+            if ui.button("Confirm reset").clicked() {
+                ui.data_mut(|data| data.insert_temp(confirm_id, false));
+                action = Some(DosimeterAction::ResetDose);
+            }
+            if ui.button("Cancel").clicked() {
+                ui.data_mut(|data| data.insert_temp(confirm_id, false));
+            }
         });
-        if reset {
-            confirm = false;
-            ui.data_mut(|data| data.insert_temp(confirm_id, false));
-            return Some(DosimeterAction::ResetDose);
-        }
-        if cancel {
-            confirm = false;
-            ui.data_mut(|data| data.insert_temp(confirm_id, false));
-        }
-        ui.data_mut(|data| data.insert_temp(confirm_id, confirm));
-        return None;
+        return action;
     }
     if ui.button("Reset dose").clicked() {
-        confirm = true;
         ui.data_mut(|data| data.insert_temp(confirm_id, true));
     }
     None

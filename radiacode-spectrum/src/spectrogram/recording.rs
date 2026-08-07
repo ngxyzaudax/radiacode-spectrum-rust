@@ -4,12 +4,13 @@ use tracing::info;
 
 use crate::energy::energy_grid;
 use crate::model::SpectrumView;
-use crate::spectrogram::capture::SpectrogramCapture;
 use crate::spectrogram::model::SpectrogramDisplay;
+use crate::spectrogram::recording_seed::{
+    ensure_live_series, recording_header, seed_writer_from_live,
+};
 use crate::spectrogram::state::SpectrogramState;
 use crate::spectrogram::storage::{
-    ensure_dir, header_now, load_recording, open_recording_append, timestamp_filename,
-    RecordingWriter,
+    ensure_dir, load_recording, open_recording_append, timestamp_filename, RecordingWriter,
 };
 
 pub fn start_recording(
@@ -29,21 +30,58 @@ pub fn start_recording(
         return Err("No channels in energy range.".into());
     }
     ensure_live_series(&mut cap, spectrum, device_serial, &grid.energies_kev);
-    cap.skip_next_sample = true;
     let dir = ensure_dir(&cap.settings.recordings_dir).map_err(|error| error.to_string())?;
     let path = dir.join(timestamp_filename());
-    let header = header_from_spectrum(
-        spectrum,
-        device_serial,
-        grid.indices.len() as u32,
-        cap.settings.capture_interval(),
-    );
+    let header = recording_header(&cap, spectrum, device_serial, grid.indices.len() as u32);
     info!(path = %path.display(), "spectrogram recording started");
-    let writer = RecordingWriter::create(path, &header).map_err(|error| error.to_string())?;
+    let mut writer =
+        RecordingWriter::create(path, &header).map_err(|error| error.to_string())?;
+    let seeded_rows = seed_writer_from_live(&mut writer, cap.live_series.as_ref())
+        .map_err(|error| error.to_string())?;
+    let continue_live = seeded_rows > 0 && cap.baseline.is_some();
+    if !continue_live {
+        cap.skip_next_sample = true;
+    }
     cap.recording = Some(writer);
     cap.paused_recording_path = None;
+    cap.capture_enabled = true;
     cap.last_auto_save = None;
-    cap.status = "Recording started.".into();
+    cap.status = if seeded_rows > 0 {
+        format!("Recording started with {seeded_rows} existing row(s).")
+    } else {
+        "Recording started.".into()
+    };
+    cap.mark_dirty();
+    Ok(())
+}
+
+pub fn pause_capture(state: &mut SpectrogramState) -> Result<(), String> {
+    let mut cap = state
+        .capture
+        .lock()
+        .map_err(|_| "capture lock failed".to_string())?;
+    cap.capture_enabled = false;
+    cap.status = if cap.recording.is_some() {
+        "Recording paused.".into()
+    } else {
+        "Live capture paused.".into()
+    };
+    cap.mark_dirty();
+    Ok(())
+}
+
+pub fn resume_capture(state: &mut SpectrogramState) -> Result<(), String> {
+    let mut cap = state
+        .capture
+        .lock()
+        .map_err(|_| "capture lock failed".to_string())?;
+    cap.capture_enabled = true;
+    cap.skip_next_sample = true;
+    cap.status = if cap.recording.is_some() {
+        "Recording.".into()
+    } else {
+        "Live capture.".into()
+    };
     cap.mark_dirty();
     Ok(())
 }
@@ -84,6 +122,7 @@ pub fn resume_recording(
     cap.skip_next_sample = true;
     let writer = open_recording_append(path.clone()).map_err(|error| error.to_string())?;
     cap.recording = Some(writer);
+    cap.capture_enabled = true;
     cap.last_auto_save = None;
     cap.status = format!("Recording resumed to {}.", path.display());
     cap.mark_dirty();
@@ -98,6 +137,7 @@ pub fn load_into_state(state: &mut SpectrogramState, path: PathBuf) {
     match load_recording(&path) {
         Ok(series) => {
             state.loaded_series = Some(series);
+            state.loaded_path = Some(path.clone());
             state.display = SpectrogramDisplay::Loaded;
             if let Some(loaded) = state.loaded_series.as_ref() {
                 state.view_range.fit_series_energy(&loaded.energies_kev);
@@ -112,41 +152,4 @@ pub fn load_into_state(state: &mut SpectrogramState, path: PathBuf) {
         }
         Err(error) => state.status = format!("Load failed: {error}"),
     }
-}
-
-fn ensure_live_series(
-    capture: &mut SpectrogramCapture,
-    spectrum: &SpectrumView,
-    device_serial: Option<&str>,
-    energies_kev: &[f64],
-) {
-    if capture.live_series.is_some() {
-        return;
-    }
-    let header = header_from_spectrum(
-        spectrum,
-        device_serial,
-        energies_kev.len() as u32,
-        capture.settings.capture_interval(),
-    );
-    capture.live_series =
-        Some(crate::spectrogram::model::SpectrogramSeries::new(header, energies_kev.to_vec()));
-}
-
-fn header_from_spectrum(
-    spectrum: &SpectrumView,
-    device_serial: Option<&str>,
-    channel_count: u32,
-    interval_secs: f64,
-) -> crate::spectrogram::model::SpectrogramHeader {
-    let grid = energy_grid(spectrum);
-    header_now(
-        spectrum.a0,
-        spectrum.a1,
-        spectrum.a2,
-        channel_count,
-        interval_secs,
-        device_serial.map(str::to_string),
-        grid.energies_kev,
-    )
 }

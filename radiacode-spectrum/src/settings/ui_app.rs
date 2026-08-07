@@ -2,43 +2,13 @@ use egui::{RichText, Ui};
 
 use crate::settings::state::SettingsState;
 use crate::settings::ui_layout::toggle_switch;
-use crate::spectrogram::color_scheme::ColorScheme;
 use crate::spectrogram::storage::default_spectrograms_dir;
+use crate::spectrogram::ui_settings::draw_capture_settings;
 use crate::theme::MUTED;
 
-pub fn draw_app_capture(ui: &mut Ui, state: &mut SettingsState) -> bool {
-    let mut changed = false;
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut state.spectrogram.capture_interval_secs, 1.0..=600.0)
-                .text("Interval (s)"),
-        )
-        .changed();
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut state.spectrogram.max_samples, 100..=20_000)
-                .logarithmic(true)
-                .text("Max samples"),
-        )
-        .changed();
+pub fn draw_app_capture(ui: &mut Ui, state: &mut SettingsState, recording: bool) -> bool {
+    let mut changed = draw_capture_settings(ui, &mut state.spectrogram, recording);
     changed |= draw_recordings_dir(ui, state);
-    changed |= toggle_switch(ui, &mut state.spectrogram.auto_brightness, "Auto brightness");
-    if !state.spectrogram.auto_brightness {
-        changed |= ui
-            .add(egui::Slider::new(&mut state.spectrogram.z_min, 0.0..=10_000.0).text("Z min"))
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut state.spectrogram.z_max, 1.0..=50_000.0).text("Z max"))
-            .changed();
-    }
-    ui.horizontal(|ui| {
-        ui.label("Palette");
-        for palette in ColorScheme::ALL {
-            changed |= ui
-                .selectable_value(&mut state.spectrogram.palette, palette, palette.label())
-                .changed();
-        }
-    });
     changed
 }
 

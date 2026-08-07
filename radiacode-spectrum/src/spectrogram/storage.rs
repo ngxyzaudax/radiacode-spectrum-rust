@@ -122,7 +122,6 @@ pub struct RecordingWriter {
     pub path: PathBuf,
     pub row_count: u32,
     version: u32,
-    channel_count: u32,
 }
 
 impl RecordingWriter {
@@ -145,7 +144,6 @@ impl RecordingWriter {
             path,
             row_count: 0,
             version: VERSION_CURRENT,
-            channel_count: header.channel_count,
         })
     }
 
@@ -180,7 +178,7 @@ pub fn open_recording_append(path: PathBuf) -> std::io::Result<RecordingWriter> 
     let version = read_u32(&mut inner)?;
     let header_len = read_u32(&mut inner)? as usize;
     inner.seek(SeekFrom::Current(header_len as i64))?;
-    let channel_count = read_u32(&mut inner)?;
+    let _channel_count = read_u32(&mut inner)?;
     let row_count_offset = inner.stream_position()?;
     Ok(RecordingWriter {
         file,
@@ -188,7 +186,6 @@ pub fn open_recording_append(path: PathBuf) -> std::io::Result<RecordingWriter> 
         path,
         row_count,
         version,
-        channel_count,
     })
 }
 

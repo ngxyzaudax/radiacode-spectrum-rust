@@ -29,15 +29,3 @@ pub async fn read_mgmt_rssi_dbm(mac: &str) -> Option<i16> {
         None
     }
 }
-
-pub fn read_dbus_rssi_dbm(mac: &str) -> Option<i16> {
-    #[cfg(target_os = "linux")]
-    {
-        return rssi_linux::read_dbus_rssi_dbm(mac);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = mac;
-        None
-    }
-}
