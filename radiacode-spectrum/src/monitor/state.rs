@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use radiacode_core::{AlarmLimits, AlarmLimitsUpdate, LiveRates};
+use radiacode_core::{AlarmLimits, LiveRates};
 
 const HISTORY_MINUTES: f64 = 10.0;
 const MAX_SAMPLES: usize = 600;
@@ -20,17 +20,8 @@ pub struct MonitorState {
     pub history: VecDeque<MonitorSample>,
     pub latest: Option<LiveRates>,
     pub limits: Option<AlarmLimits>,
-    pub draft: AlarmLimitsDraft,
     pub started_at: Option<Instant>,
     pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AlarmLimitsDraft {
-    pub l1_dose_rate: f32,
-    pub l2_dose_rate: f32,
-    pub l1_count_rate: f32,
-    pub l2_count_rate: f32,
 }
 
 impl MonitorState {
@@ -39,12 +30,6 @@ impl MonitorState {
             history: VecDeque::new(),
             latest: None,
             limits: None,
-            draft: AlarmLimitsDraft {
-                l1_dose_rate: 0.0,
-                l2_dose_rate: 0.0,
-                l1_count_rate: 0.0,
-                l2_count_rate: 0.0,
-            },
             started_at: None,
             status: "Connect a device to start monitoring.".into(),
         }
@@ -66,12 +51,6 @@ impl MonitorState {
     }
 
     pub fn apply_limits(&mut self, limits: AlarmLimits) {
-        self.draft = AlarmLimitsDraft {
-            l1_dose_rate: limits.l1_dose_rate,
-            l2_dose_rate: limits.l2_dose_rate,
-            l1_count_rate: limits.l1_count_rate,
-            l2_count_rate: limits.l2_count_rate,
-        };
         self.limits = Some(limits);
     }
 
@@ -103,27 +82,6 @@ impl MonitorState {
             count_unit_cpm: rates.count_unit_cpm,
         });
         self.status = "Live monitor".into();
-    }
-
-    pub fn limits_dirty(&self) -> bool {
-        let Some(limits) = self.limits.as_ref() else {
-            return false;
-        };
-        self.draft.l1_dose_rate != limits.l1_dose_rate
-            || self.draft.l2_dose_rate != limits.l2_dose_rate
-            || self.draft.l1_count_rate != limits.l1_count_rate
-            || self.draft.l2_count_rate != limits.l2_count_rate
-    }
-
-    pub fn to_update(&self) -> AlarmLimitsUpdate {
-        AlarmLimitsUpdate {
-            l1_dose_rate: Some(self.draft.l1_dose_rate),
-            l2_dose_rate: Some(self.draft.l2_dose_rate),
-            l1_count_rate: Some(self.draft.l1_count_rate),
-            l2_count_rate: Some(self.draft.l2_count_rate),
-            dose_unit_sv: None,
-            count_unit_cpm: None,
-        }
     }
 
     pub fn dose_alarm_level(&self) -> AlarmLevel {
@@ -167,7 +125,7 @@ impl MonitorState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AlarmLevel {
     Normal,
     Warning,

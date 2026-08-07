@@ -32,6 +32,16 @@ pub fn decode_dose_alarm(raw_ur_h: u32, dose_unit_sv: bool) -> f32 {
     raw_ur_h as f32 / divisor
 }
 
+pub fn encode_dose_accum(display_micro: f32, dose_unit_sv: bool) -> u32 {
+    let multiplier = if dose_unit_sv { 100.0 } else { 1.0 };
+    (display_micro * multiplier).round().max(0.0) as u32
+}
+
+pub fn decode_dose_accum(raw: u32, dose_unit_sv: bool) -> f32 {
+    let divisor = if dose_unit_sv { 100.0 } else { 1.0 };
+    raw as f32 / divisor
+}
+
 pub fn encode_count_alarm(display: f32, count_unit_cpm: bool) -> u32 {
     let multiplier = if count_unit_cpm { 1.0 / 6.0 } else { 10.0 };
     (display * multiplier).round().max(0.0) as u32

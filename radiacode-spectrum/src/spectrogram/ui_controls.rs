@@ -4,11 +4,10 @@ use egui::{RichText, Ui};
 
 use crate::model::ConnectionState;
 use crate::theme::{ACCENT, MUTED};
-use crate::spectrogram::color_scheme::ColorScheme;
 use crate::spectrogram::library;
 use crate::spectrogram::model::RecordingEntry;
 use crate::spectrogram::state::SpectrogramState;
-use crate::spectrogram::ui_controls_settings::draw_settings_panel;
+use crate::spectrogram::ui_controls_settings::draw_overlay_toggles;
 
 pub enum SpectrogramControlsAction {
     StartRecording,
@@ -35,21 +34,13 @@ pub fn draw_spectrogram_controls(
     action = draw_transport(ui, state, connection).or(action);
 
     ui.add_space(4.0);
-    ui.label("Color scheme");
-    let mut settings_changed = false;
-    egui::ComboBox::from_id_salt("spectrogram_color_scheme")
-        .selected_text(state.settings.palette.label())
-        .show_ui(ui, |ui| {
-            for scheme in ColorScheme::ALL {
-                if ui
-                    .selectable_value(&mut state.settings.palette, scheme, scheme.label())
-                    .changed()
-                {
-                    settings_changed = true;
-                }
-            }
-        });
-    settings_changed |= draw_settings_panel(ui, state);
+    ui.label(
+        RichText::new("Capture interval, palette, and brightness are in Settings.")
+            .small()
+            .color(MUTED),
+    );
+    ui.add_space(4.0);
+    let mut settings_changed = draw_overlay_toggles(ui, state);
 
     ui.add_space(4.0);
     if ui.button("Reset accumulation").clicked() {
@@ -57,7 +48,6 @@ pub fn draw_spectrogram_controls(
     }
 
     if settings_changed {
-        state.on_settings_changed();
         action = Some(SpectrogramControlsAction::SettingsChanged);
     }
 

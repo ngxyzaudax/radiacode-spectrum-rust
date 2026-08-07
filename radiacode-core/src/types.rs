@@ -34,6 +34,8 @@ pub struct AlarmLimits {
     pub l2_count_rate: f32,
     pub l1_dose_rate: f32,
     pub l2_dose_rate: f32,
+    pub l1_dose: f32,
+    pub l2_dose: f32,
     pub dose_unit_sv: bool,
     pub count_unit_cpm: bool,
 }
@@ -44,6 +46,8 @@ pub struct AlarmLimitsUpdate {
     pub l2_count_rate: Option<f32>,
     pub l1_dose_rate: Option<f32>,
     pub l2_dose_rate: Option<f32>,
+    pub l1_dose: Option<f32>,
+    pub l2_dose: Option<f32>,
     pub dose_unit_sv: Option<bool>,
     pub count_unit_cpm: Option<bool>,
 }

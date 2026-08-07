@@ -172,6 +172,7 @@ impl AppState {
                 None
             }
             WorkerEvent::AlarmLimits(_) => None,
+            WorkerEvent::DeviceConfig(_) => None,
             WorkerEvent::Error(message) => {
                 warn!(%message, "ui received worker error");
                 self.scanning = false;

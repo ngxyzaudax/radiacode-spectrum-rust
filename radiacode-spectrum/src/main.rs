@@ -1,12 +1,16 @@
 mod app;
+mod app_config;
 mod energy;
 mod events;
 mod icon;
 mod logging;
 mod model;
 mod monitor;
+mod pc_alarm;
 mod scale;
+mod settings;
 mod smooth;
+mod spectrogram;
 mod theme;
 mod ui_controls;
 mod ui_device;
@@ -15,7 +19,6 @@ mod ui_disconnected;
 mod ui_plot;
 mod usb_access;
 mod view_tab;
-mod spectrogram;
 mod worker;
 mod worker_ops;
 

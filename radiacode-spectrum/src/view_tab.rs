@@ -4,6 +4,7 @@ pub enum ViewTab {
     Monitor,
     Spectrum,
     Spectrogram,
+    Settings,
 }
 
 impl ViewTab {
@@ -12,6 +13,7 @@ impl ViewTab {
             Self::Monitor => "Monitor",
             Self::Spectrum => "Spectrum",
             Self::Spectrogram => "Spectrogram",
+            Self::Settings => "Settings",
         }
     }
 }

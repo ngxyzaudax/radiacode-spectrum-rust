@@ -3,6 +3,7 @@ mod buffer;
 mod command;
 mod data_buf;
 mod device;
+mod device_config;
 mod device_info;
 mod device_model;
 mod device_settings;
@@ -31,6 +32,10 @@ pub use data_buf::{
     RealTimeRates,
 };
 pub use device::RadiaCode;
+pub use device_config::{
+    apply_device_config, load_device_config, sync_device_clock, AlarmSignalMode, BacklightOffTime,
+    DeviceConfig, DisplayDirection, SignalFlags,
+};
 pub use device_model::{model_from_advertisement, model_from_serial, serial_from_advertisement};
 pub use discovery::{
     merge_discovered, resolve_usb_endpoint, DeviceEndpoint, DiscoveredDevice, TransportKind,

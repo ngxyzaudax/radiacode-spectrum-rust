@@ -1,13 +1,24 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransportKind {
     Bluetooth,
     Usb,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceEndpoint {
     Bluetooth { address: String },
     Usb { serial: String },
+}
+
+impl TransportKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bluetooth => "Bluetooth",
+            Self::Usb => "USB",
+        }
+    }
 }
 
 impl DeviceEndpoint {

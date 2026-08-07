@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use radiacode_bluetooth::{scan_radiacode_devices, BleError};
 use radiacode_core::{
-    merge_discovered, merge_status, AlarmLimits, AlarmLimitsUpdate, DeviceEndpoint, DeviceStatus,
-    DiscoveredDevice, Error, RadiaCode, SessionRestore, Spectrum,
+    merge_discovered, merge_status, AlarmLimits, AlarmLimitsUpdate, DeviceConfig, DeviceEndpoint,
+    DeviceStatus, DiscoveredDevice, Error, RadiaCode, SessionRestore, Spectrum,
 };
 use radiacode_usb::scan_usb_devices;
 use tracing::{debug, error, info, warn};
@@ -480,6 +480,142 @@ pub async fn handle_set_alarm_limits(
                 .await
             }
         },
+        Err(error) => {
+            handle_device_error(
+                events,
+                device,
+                session_endpoint,
+                error,
+                session,
+                link_status,
+                session_restore,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn handle_fetch_device_config(
+    events: &Sender<WorkerEvent>,
+    device: Option<RadiaCode>,
+    session_endpoint: Option<&DeviceEndpoint>,
+    alarm_limits: &mut Option<AlarmLimits>,
+    session: &SessionEpoch,
+    link_status: &mut DeviceStatus,
+    session_restore: &Option<SessionRestore>,
+) -> Option<RadiaCode> {
+    let Some(mut device) = device else {
+        warn!("device config fetch skipped: no active device");
+        return None;
+    };
+    match device.load_device_config().await {
+        Ok(config) => {
+            if session.active() {
+                *alarm_limits = Some(config.alarms);
+                let _ = events.send(WorkerEvent::AlarmLimits(config.alarms));
+                let _ = events.send(WorkerEvent::DeviceConfig(config));
+            }
+            Some(device)
+        }
+        Err(error) => {
+            handle_device_error(
+                events,
+                device,
+                session_endpoint,
+                error,
+                session,
+                link_status,
+                session_restore,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn handle_apply_device_config(
+    events: &Sender<WorkerEvent>,
+    device: Option<RadiaCode>,
+    session_endpoint: Option<&DeviceEndpoint>,
+    config: DeviceConfig,
+    alarm_limits: &mut Option<AlarmLimits>,
+    session: &SessionEpoch,
+    link_status: &mut DeviceStatus,
+    session_restore: &Option<SessionRestore>,
+) -> Option<RadiaCode> {
+    let Some(mut device) = device else {
+        warn!("device config apply skipped: no active device");
+        return None;
+    };
+    let apply_error = match device.apply_device_config(&config).await {
+        Ok(()) => None,
+        Err(error) if should_reconnect(&error, session_endpoint) => {
+            return handle_device_error(
+                events,
+                device,
+                session_endpoint,
+                error,
+                session,
+                link_status,
+                session_restore,
+            )
+            .await;
+        }
+        Err(error) => {
+            error!(%error, "device config apply failed; reloading device state");
+            Some(error)
+        }
+    };
+    match device.load_device_config().await {
+        Ok(loaded) => {
+            if session.active() {
+                *alarm_limits = Some(loaded.alarms);
+                let _ = events.send(WorkerEvent::AlarmLimits(loaded.alarms));
+                let _ = events.send(WorkerEvent::DeviceConfig(loaded));
+                if let Some(error) = apply_error {
+                    let _ = events.send(WorkerEvent::Error(error.to_string()));
+                }
+            }
+            Some(device)
+        }
+        Err(error) => {
+            if apply_error.is_none() && session.active() {
+                *alarm_limits = Some(config.alarms);
+                let _ = events.send(WorkerEvent::AlarmLimits(config.alarms));
+                let _ = events.send(WorkerEvent::DeviceConfig(config));
+            }
+            handle_device_error(
+                events,
+                device,
+                session_endpoint,
+                error,
+                session,
+                link_status,
+                session_restore,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn handle_sync_device_clock(
+    events: &Sender<WorkerEvent>,
+    device: Option<RadiaCode>,
+    session_endpoint: Option<&DeviceEndpoint>,
+    session: &SessionEpoch,
+    link_status: &mut DeviceStatus,
+    session_restore: &Option<SessionRestore>,
+) -> Option<RadiaCode> {
+    let Some(mut device) = device else {
+        warn!("clock sync skipped: no active device");
+        return None;
+    };
+    match device.sync_device_clock().await {
+        Ok(()) => {
+            if session.active() {
+                info!("device clock synchronized");
+            }
+            Some(device)
+        }
         Err(error) => {
             handle_device_error(
                 events,

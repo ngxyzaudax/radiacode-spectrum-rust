@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use radiacode_core::{
-    AlarmLimits, AlarmLimitsUpdate, DeviceEndpoint, DeviceStatus, DiscoveredDevice, LiveRates,
-    RadiaCode, SessionRestore,
+    AlarmLimits, AlarmLimitsUpdate, DeviceConfig, DeviceEndpoint, DeviceStatus, DiscoveredDevice,
+    LiveRates, RadiaCode, SessionRestore,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, MissedTickBehavior};
@@ -14,8 +14,9 @@ use tracing::{debug, info};
 use crate::model::{DeviceInfo, SpectrumView};
 use crate::spectrogram::capture::{spawn_capture_router, SpectrogramCapture};
 use crate::worker_ops::{
-    handle_connect, handle_disconnect, handle_monitor, handle_reset, handle_scan,
-    handle_set_alarm_limits, handle_spectrum, SessionEpoch,
+    handle_apply_device_config, handle_connect, handle_disconnect, handle_fetch_device_config,
+    handle_monitor, handle_reset, handle_scan, handle_set_alarm_limits, handle_spectrum,
+    handle_sync_device_clock, SessionEpoch,
 };
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,10 @@ pub enum WorkerCommand {
     FetchMonitor,
     SetAlarmLimits(AlarmLimitsUpdate),
     SetCaptureInterval(f64),
+    SetMonitorPollInterval(u64),
+    FetchDeviceConfig,
+    ApplyDeviceConfig(DeviceConfig),
+    SyncDeviceClock,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +50,7 @@ pub enum WorkerEvent {
     MonitorSample(LiveRates),
     MonitorPollComplete,
     AlarmLimits(AlarmLimits),
+    DeviceConfig(DeviceConfig),
     Error(String),
     Busy(bool),
 }
@@ -120,6 +126,10 @@ async fn recv_batch(commands: &mut UnboundedReceiver<WorkerCommand>) -> Option<C
 
 fn capture_duration(secs: f64) -> Duration {
     Duration::from_secs_f64(secs.clamp(1.0, 600.0))
+}
+
+fn monitor_poll_duration(secs: u64) -> Duration {
+    Duration::from_secs(secs.clamp(1, 60))
 }
 
 fn reset_session(
@@ -221,9 +231,10 @@ async fn worker_loop(
     let mut link_status = DeviceStatus::default();
     let mut session_restore: Option<SessionRestore> = None;
     let mut capture_interval_secs = 5.0;
+    let mut monitor_poll_secs = MONITOR_POLL_SECS;
     let mut spectrum_tick = time::interval(capture_duration(capture_interval_secs));
     spectrum_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut monitor_tick = time::interval(Duration::from_secs(MONITOR_POLL_SECS));
+    let mut monitor_tick = time::interval(monitor_poll_duration(monitor_poll_secs));
     monitor_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     debug!("device worker loop ready");
     loop {
@@ -233,31 +244,42 @@ async fn worker_loop(
                     break;
                 };
                 if let Some(command) = batch.priority {
-                    if let WorkerCommand::SetCaptureInterval(secs) = command {
-                        capture_interval_secs = secs;
-                        spectrum_tick = time::interval(capture_duration(capture_interval_secs));
-                        spectrum_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                        debug!(capture_interval_secs, "worker capture interval updated");
-                        continue;
+                    match command {
+                        WorkerCommand::SetCaptureInterval(secs) => {
+                            capture_interval_secs = secs;
+                            spectrum_tick = time::interval(capture_duration(capture_interval_secs));
+                            spectrum_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                            debug!(capture_interval_secs, "worker capture interval updated");
+                            continue;
+                        }
+                        WorkerCommand::SetMonitorPollInterval(secs) => {
+                            monitor_poll_secs = secs.clamp(1, 60);
+                            monitor_tick = time::interval(monitor_poll_duration(monitor_poll_secs));
+                            monitor_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                            debug!(monitor_poll_secs, "worker monitor poll interval updated");
+                            continue;
+                        }
+                        command => {
+                            debug!(?command, session_endpoint = ?session_endpoint, "worker command");
+                            run_command(
+                                command,
+                                &events,
+                                &session_epoch,
+                                &mut device,
+                                &mut session_endpoint,
+                                &mut alarm_limits,
+                                &mut monitor_polls,
+                                &mut link_status,
+                                &mut session_restore,
+                            )
+                            .await;
+                            if device.is_some() {
+                                spectrum_tick.reset();
+                                monitor_tick.reset();
+                            }
+                            continue;
+                        }
                     }
-                    debug!(?command, session_endpoint = ?session_endpoint, "worker command");
-                    run_command(
-                        command,
-                        &events,
-                        &session_epoch,
-                        &mut device,
-                        &mut session_endpoint,
-                        &mut alarm_limits,
-                        &mut monitor_polls,
-                        &mut link_status,
-                        &mut session_restore,
-                    )
-                    .await;
-                    if device.is_some() {
-                        spectrum_tick.reset();
-                        monitor_tick.reset();
-                    }
-                    continue;
                 }
                 run_fetch_batch(
                     batch,
@@ -434,7 +456,73 @@ async fn run_command(
                 *session_restore = None;
             }
         }
-        WorkerCommand::SetCaptureInterval(_) => {}
+        WorkerCommand::FetchDeviceConfig => {
+            *device = handle_fetch_device_config(
+                events,
+                device.take(),
+                session_endpoint.as_ref(),
+                alarm_limits,
+                &session,
+                link_status,
+                session_restore,
+            )
+            .await;
+            if device.is_none() {
+                reset_session(
+                    device,
+                    session_endpoint,
+                    alarm_limits,
+                    monitor_polls,
+                    link_status,
+                    session_restore,
+                );
+            }
+        }
+        WorkerCommand::ApplyDeviceConfig(config) => {
+            *device = handle_apply_device_config(
+                events,
+                device.take(),
+                session_endpoint.as_ref(),
+                config,
+                alarm_limits,
+                &session,
+                link_status,
+                session_restore,
+            )
+            .await;
+            if device.is_none() {
+                reset_session(
+                    device,
+                    session_endpoint,
+                    alarm_limits,
+                    monitor_polls,
+                    link_status,
+                    session_restore,
+                );
+            }
+        }
+        WorkerCommand::SyncDeviceClock => {
+            *device = handle_sync_device_clock(
+                events,
+                device.take(),
+                session_endpoint.as_ref(),
+                &session,
+                link_status,
+                session_restore,
+            )
+            .await;
+            if device.is_none() {
+                reset_session(
+                    device,
+                    session_endpoint,
+                    alarm_limits,
+                    monitor_polls,
+                    link_status,
+                    session_restore,
+                );
+            }
+        }
+        WorkerCommand::SetCaptureInterval(_) | WorkerCommand::SetMonitorPollInterval(_) => {}
     }
     let _ = events.send(WorkerEvent::Busy(false));
 }

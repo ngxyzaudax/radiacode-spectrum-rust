@@ -147,6 +147,8 @@ mod tests {
             l2_count_rate: 40.0,
             l1_dose_rate: 0.15,
             l2_dose_rate: 0.3,
+            l1_dose: 100.0,
+            l2_dose: 200.0,
             dose_unit_sv: true,
             count_unit_cpm: false,
         });
@@ -165,6 +167,8 @@ mod tests {
             l2_count_rate: 40.0,
             l1_dose_rate: 0.15,
             l2_dose_rate: 0.3,
+            l1_dose: 100.0,
+            l2_dose: 200.0,
             dose_unit_sv: true,
             count_unit_cpm: false,
         });
