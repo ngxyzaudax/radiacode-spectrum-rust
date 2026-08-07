@@ -60,6 +60,19 @@ pub struct LiveRates {
     pub count_unit_cpm: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AccumulatedDose {
+    pub dose: f32,
+    pub duration_secs: u32,
+    pub dose_unit_sv: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorPollSample {
+    pub rates: Option<LiveRates>,
+    pub accumulated: Option<AccumulatedDose>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spectrum {
     pub duration: Duration,

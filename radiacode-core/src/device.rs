@@ -171,23 +171,6 @@ impl RadiaCode {
         Ok(response)
     }
 
-    pub async fn write_vsfr(&mut self, id: VirtSfr, data: &[u8]) -> Result<()> {
-        let mut args = u32::from(id).to_le_bytes().to_vec();
-        args.extend_from_slice(data);
-        let mut response = self.execute_raw(Command::WrVirtSfr, &args).await?;
-        let retcode = response.take_u32_le()?;
-        if retcode != 1 {
-            return Err(Error::UnexpectedReturnCode(retcode));
-        }
-        if response.size() != 0 {
-            return Err(Error::ProtocolMismatch {
-                expected: "empty payload".into(),
-                got: format!("{} trailing bytes", response.size()),
-            });
-        }
-        Ok(())
-    }
-
     pub async fn read_vsfr_u32(&mut self, id: VirtSfr) -> Result<u32> {
         let mut response = self
             .execute_raw(Command::RdVirtSfr, &u32::from(id).to_le_bytes())
@@ -197,6 +180,47 @@ impl RadiaCode {
             return Err(Error::UnexpectedReturnCode(retcode));
         }
         response.take_u32_le()
+    }
+
+    pub async fn read_vsfr_optional(&mut self, id: VirtSfr) -> Result<Option<u32>> {
+        let mut response = self
+            .execute_raw(Command::RdVirtSfr, &u32::from(id).to_le_bytes())
+            .await?;
+        let retcode = response.take_u32_le()?;
+        if retcode == 1 {
+            Ok(Some(response.take_u32_le()?))
+        } else if retcode == 0 {
+            Ok(None)
+        } else {
+            Err(Error::UnexpectedReturnCode(retcode))
+        }
+    }
+
+    pub async fn write_vsfr(&mut self, id: VirtSfr, data: &[u8]) -> Result<()> {
+        if !self.write_vsfr_optional(id, data).await? {
+            return Err(Error::UnexpectedReturnCode(0));
+        }
+        Ok(())
+    }
+
+    pub async fn write_vsfr_optional(&mut self, id: VirtSfr, data: &[u8]) -> Result<bool> {
+        let mut args = u32::from(id).to_le_bytes().to_vec();
+        args.extend_from_slice(data);
+        let mut response = self.execute_raw(Command::WrVirtSfr, &args).await?;
+        let retcode = response.take_u32_le()?;
+        if retcode == 1 {
+            if response.size() != 0 {
+                return Err(Error::ProtocolMismatch {
+                    expected: "empty payload".into(),
+                    got: format!("{} trailing bytes", response.size()),
+                });
+            }
+            Ok(true)
+        } else if retcode == 0 {
+            Ok(false)
+        } else {
+            Err(Error::UnexpectedReturnCode(retcode))
+        }
     }
 
     pub async fn read_vsfr_f32(&mut self, id: VirtSfr) -> Result<f32> {

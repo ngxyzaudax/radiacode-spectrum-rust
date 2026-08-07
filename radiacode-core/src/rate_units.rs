@@ -60,6 +60,18 @@ pub fn dose_unit_label(dose_unit_sv: bool) -> &'static str {
     }
 }
 
+pub fn dose_accum_unit_label(dose_unit_sv: bool) -> &'static str {
+    if dose_unit_sv {
+        "µSv"
+    } else {
+        "µR"
+    }
+}
+
+pub fn dose_display_from_accum_r(dose_r: f32, dose_unit_sv: bool) -> f32 {
+    dose_display_from_rh(dose_r, dose_unit_sv)
+}
+
 pub fn count_unit_label(count_unit_cpm: bool) -> &'static str {
     if count_unit_cpm {
         "cpm"

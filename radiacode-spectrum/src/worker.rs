@@ -5,7 +5,7 @@ use std::time::Duration;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use radiacode_core::{
     AlarmLimits, AlarmLimitsUpdate, DeviceConfig, DeviceEndpoint, DeviceStatus, DiscoveredDevice,
-    LiveRates, RadiaCode, SessionRestore,
+    MonitorPollSample, RadiaCode, SessionRestore,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, MissedTickBehavior};
@@ -16,6 +16,7 @@ use crate::spectrogram::capture::{spawn_capture_router, SpectrogramCapture};
 use crate::worker_ops::{
     handle_apply_device_config, handle_connect, handle_disconnect, handle_fetch_device_config,
     handle_monitor, handle_reset, handle_scan, handle_set_alarm_limits, handle_spectrum,
+    handle_dose_reset,
     handle_sync_device_clock, SessionEpoch,
 };
 
@@ -29,6 +30,7 @@ pub enum WorkerCommand {
     Disconnect,
     FetchSpectrum,
     ResetSpectrum,
+    ResetDose,
     FetchMonitor,
     SetAlarmLimits(AlarmLimitsUpdate),
     SetCaptureInterval(f64),
@@ -47,7 +49,8 @@ pub enum WorkerEvent {
     UsbPermissionRequired { endpoint: DeviceEndpoint },
     Spectrum(SpectrumView),
     DeviceStatus(DeviceStatus),
-    MonitorSample(LiveRates),
+    MonitorSample(MonitorPollSample),
+    DoseResetComplete,
     MonitorPollComplete,
     AlarmLimits(AlarmLimits),
     DeviceConfig(DeviceConfig),
@@ -401,6 +404,24 @@ async fn run_command(
         }
         WorkerCommand::ResetSpectrum => {
             *device = handle_reset(
+                events,
+                device.take(),
+                session_endpoint.as_ref(),
+                &session,
+                link_status,
+                session_restore,
+            )
+            .await;
+            if device.is_none() {
+                *session_endpoint = None;
+                *alarm_limits = None;
+                *monitor_polls = 0;
+                *link_status = DeviceStatus::default();
+                *session_restore = None;
+            }
+        }
+        WorkerCommand::ResetDose => {
+            *device = handle_dose_reset(
                 events,
                 device.take(),
                 session_endpoint.as_ref(),

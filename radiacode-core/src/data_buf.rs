@@ -3,6 +3,8 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RareStatus {
+    pub duration_secs: u32,
+    pub dose_r: f32,
     pub temperature_c: f32,
     pub battery_percent: f32,
 }
@@ -119,12 +121,14 @@ fn parse_record(buffer: &mut BytesBuffer, eid: u8, gid: u8) -> Result<RecordPars
         }));
     }
     if eid == 0 && gid == 3 {
-        let _duration = buffer.take_u32_le()?;
-        let _dose = buffer.take_f32_le()?;
+        let duration_secs = buffer.take_u32_le()?;
+        let dose_r = buffer.take_f32_le()?;
         let temperature_raw = buffer.take_u16_le()?;
         let charge_raw = buffer.take_u16_le()?;
         let _flags = buffer.take_u16_le()?;
         return Ok(RecordParse::Rare(RareStatus {
+            duration_secs,
+            dose_r,
             temperature_c: (f32::from(temperature_raw) - 2000.0) / 100.0,
             battery_percent: f32::from(charge_raw) / 100.0,
         }));
@@ -172,6 +176,8 @@ mod tests {
             1u8, 0, 3, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0xd4, 0x10, 0x34, 0x21, 0x00, 0x00,
         ];
         let status = latest_rare_status(&bytes).expect("rare");
+        assert_eq!(status.duration_secs, 10);
+        assert!((status.dose_r - 0.0).abs() < 0.001);
         assert!((status.temperature_c - 23.08).abs() < 0.01);
         assert!((status.battery_percent - 85.0).abs() < 0.01);
     }

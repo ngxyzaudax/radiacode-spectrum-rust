@@ -1,7 +1,8 @@
 use tracing::debug;
 
-use crate::command::VirtSfr;
+use crate::command::{VirtSfr, VirtString};
 use crate::device::RadiaCode;
+use crate::sfr_catalog::sfr_supports_leds_on;
 use crate::device_time::set_local_time_now;
 use crate::error::Result;
 use crate::rate_units::{
@@ -24,6 +25,7 @@ const CTRL_CR_ALARM1: u32 = 1 << 10;
 const CTRL_CR_ALARM2: u32 = 1 << 11;
 const CTRL_CR_OOS: u32 = 1 << 12;
 const CTRL_KNOWN_MASK: u32 = 0x1FFF;
+const DEVICE_CTRL_LIGHT: u32 = 1 << 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlarmSignalMode {
@@ -249,7 +251,8 @@ pub struct DeviceConfig {
     pub sound_on: bool,
     pub vibro_on: bool,
     pub leds_on: bool,
-    pub leds_known: bool,
+    pub leds_supported: bool,
+    pub leds_uses_device_ctrl: bool,
     pub sound_ctrl: SignalFlags,
     pub vibro_ctrl: SignalFlags,
 }
@@ -276,10 +279,7 @@ pub async fn load_device_config(device: &mut RadiaCode) -> Result<DeviceConfig> 
     let values = device.read_vsfr_batch(&ids).await?;
     let dose_unit_sv = values[6] != 0;
     let count_unit_cpm = values[7] != 0;
-    let (leds_on, leds_known) = match device.read_vsfr_u32(VirtSfr::LedsOn).await {
-        Ok(value) => (value != 0, true),
-        Err(_) => (false, false),
-    };
+    let (leds_on, leds_supported, leds_uses_device_ctrl) = load_light_state(device).await?;
     let config = DeviceConfig {
         alarms: AlarmLimits {
             l1_count_rate: decode_count_alarm(values[0], count_unit_cpm),
@@ -300,16 +300,33 @@ pub async fn load_device_config(device: &mut RadiaCode) -> Result<DeviceConfig> 
         vibro_on: values[14] != 0,
         vibro_ctrl: SignalFlags::from_raw(values[15]).vibro_events(),
         leds_on,
-        leds_known,
+        leds_supported,
+        leds_uses_device_ctrl,
     };
     debug!(?config, "device config loaded");
     Ok(config)
 }
 
+async fn load_light_state(device: &mut RadiaCode) -> Result<(bool, bool, bool)> {
+    let sfr_file = device.read_virt_string(VirtString::SfrFile).await?;
+    let has_leds_on = sfr_supports_leds_on(&String::from_utf8_lossy(sfr_file.data()));
+    if has_leds_on {
+        let leds_on = device
+            .read_vsfr_optional(VirtSfr::LedsOn)
+            .await?
+            .map(|value| value != 0)
+            .unwrap_or(false);
+        return Ok((leds_on, true, false));
+    }
+    let device_ctrl = device.read_vsfr_u32(VirtSfr::DeviceCtrl).await?;
+    let leds_on = device_ctrl & DEVICE_CTRL_LIGHT != 0;
+    Ok((leds_on, true, true))
+}
+
 pub async fn apply_device_config(device: &mut RadiaCode, config: &DeviceConfig) -> Result<()> {
     let dose_unit_sv = config.alarms.dose_unit_sv;
     let count_unit_cpm = config.alarms.count_unit_cpm;
-    let pairs = vec![
+    let mut pairs = vec![
         (
             VirtSfr::CrLev1Cp10s,
             encode_count_alarm(config.alarms.l1_count_rate, count_unit_cpm),
@@ -348,14 +365,29 @@ pub async fn apply_device_config(device: &mut RadiaCode, config: &DeviceConfig) 
             config.vibro_ctrl.vibro_events().as_raw(),
         ),
     ];
+    if config.leds_supported && !config.leds_uses_device_ctrl {
+        pairs.push((VirtSfr::LedsOn, u32::from(config.leds_on)));
+    }
     device.write_vsfr_batch(&pairs).await?;
-    if config.leds_known {
-        let leds_on = u32::from(config.leds_on).to_le_bytes();
-        if let Err(error) = device.write_vsfr(VirtSfr::LedsOn, &leds_on).await {
-            debug!(%error, "LedsOn write skipped");
-        }
+    if config.leds_supported && config.leds_uses_device_ctrl {
+        apply_device_ctrl_light(device, config.leds_on).await?;
     }
     debug!(count = pairs.len(), "device config applied");
+    Ok(())
+}
+
+async fn apply_device_ctrl_light(device: &mut RadiaCode, leds_on: bool) -> Result<()> {
+    let current = device.read_vsfr_u32(VirtSfr::DeviceCtrl).await?;
+    let next = if leds_on {
+        current | DEVICE_CTRL_LIGHT
+    } else {
+        current & !DEVICE_CTRL_LIGHT
+    };
+    if next != current {
+        device
+            .write_vsfr(VirtSfr::DeviceCtrl, &next.to_le_bytes())
+            .await?;
+    }
     Ok(())
 }
 
@@ -383,7 +415,7 @@ impl RadiaCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{BacklightOffTime, SignalFlags};
+    use super::{BacklightOffTime, SignalFlags, DEVICE_CTRL_LIGHT};
 
     #[test]
     fn backlight_round_trip() {
@@ -404,5 +436,12 @@ mod tests {
         assert!(flags.count_rate_alarm2);
         assert!(flags.count_rate_out_of_scale);
         assert_eq!(flags.as_raw(), 0x1f9d);
+    }
+
+    #[test]
+    fn device_ctrl_light_bit_matches_android_toggle() {
+        assert_eq!(0x3D & DEVICE_CTRL_LIGHT, DEVICE_CTRL_LIGHT);
+        assert_eq!(0x35 & DEVICE_CTRL_LIGHT, 0);
+        assert_eq!(0x3D ^ 0x35, DEVICE_CTRL_LIGHT);
     }
 }

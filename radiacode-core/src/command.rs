@@ -43,6 +43,7 @@ impl From<VirtString> for u32 {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtSfr {
+    DeviceCtrl = 0x0500,
     DeviceLang = 0x0502,
     DeviceOn = 0x0503,
     DeviceTime = 0x0504,

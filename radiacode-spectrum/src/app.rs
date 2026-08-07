@@ -6,6 +6,7 @@ use egui::{CentralPanel, Context, Panel, Ui, ViewportCommand, ViewportId};
 use radiacode_core::{merge_discovered, resolve_usb_endpoint, DeviceEndpoint, TransportKind};
 use tracing::{debug, info, warn};
 
+use crate::dosimeter::{draw_dosimeter_controls, draw_dosimeter_view, DosimeterAction};
 use crate::events::AppState;
 use crate::icon::app_icon;
 use crate::model::{ConnectionState, DeviceInfo};
@@ -240,7 +241,8 @@ impl SpectrumApp {
     fn check_pc_alarm(&mut self) {
         let dose = self.state.monitor.dose_alarm_level();
         let count = self.state.monitor.count_alarm_level();
-        let current = dose.max(count);
+        let accum = self.state.dosimeter.dose_alarm_level();
+        let current = dose.max(count).max(accum);
         let rising = current > self.last_alarm_level && current > AlarmLevel::Normal;
         self.last_alarm_level = current;
         if rising {
@@ -334,6 +336,12 @@ impl SpectrumApp {
         if matches!(action, ControlsAction::Reset) {
             self.state.spectrum_fetch_pending = true;
             self.send(WorkerCommand::ResetSpectrum);
+        }
+    }
+
+    fn handle_dosimeter_action(&mut self, action: DosimeterAction) {
+        if matches!(action, DosimeterAction::ResetDose) {
+            self.send(WorkerCommand::ResetDose);
         }
     }
 
@@ -597,6 +605,11 @@ impl App for SpectrumApp {
                                 self.handle_spectrogram_action(action);
                             }
                         }
+                        ViewTab::Dosimeter => {
+                            if let Some(action) = draw_dosimeter_controls(ui) {
+                                self.handle_dosimeter_action(action);
+                            }
+                        }
                         ViewTab::Settings => {}
                     }
                 }
@@ -619,6 +632,11 @@ impl App for SpectrumApp {
                     &mut self.active_tab,
                     ViewTab::Spectrogram,
                     ViewTab::Spectrogram.label(),
+                );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    ViewTab::Dosimeter,
+                    ViewTab::Dosimeter.label(),
                 );
                 ui.selectable_value(
                     &mut self.active_tab,
@@ -666,6 +684,9 @@ impl App for SpectrumApp {
                         }
                         ViewTab::Spectrogram => {
                             draw_spectrogram_view(ui, &ctx, &mut self.spectrogram);
+                        }
+                        ViewTab::Dosimeter => {
+                            draw_dosimeter_view(ui, &self.state.dosimeter);
                         }
                         ViewTab::Settings => {}
                     }

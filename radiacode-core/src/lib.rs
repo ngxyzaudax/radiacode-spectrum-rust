@@ -18,6 +18,7 @@ mod protocol;
 #[cfg(test)]
 mod protocol_tests;
 mod rate_units;
+mod sfr_catalog;
 mod session_restore;
 mod spectrum;
 mod status_read;
@@ -45,8 +46,8 @@ pub use session_restore::SessionRestore;
 pub use status_read::merge_status;
 pub use transport::Transport;
 pub use types::{
-    channel_to_energy, AlarmLimits, AlarmLimitsUpdate, DeviceMetadata, DeviceStatus,
-    DeviceVersions, FirmwareVersion, LiveRates, Spectrum,
+    channel_to_energy, AccumulatedDose, AlarmLimits, AlarmLimitsUpdate, DeviceMetadata,
+    DeviceStatus, DeviceVersions, FirmwareVersion, LiveRates, MonitorPollSample, Spectrum,
 };
-pub use rate_units::{count_unit_label, dose_unit_label};
+pub use rate_units::{count_unit_label, dose_accum_unit_label, dose_unit_label};
 pub use protocol::{framed_request_header, response_matches_request, ResponseAssembler};

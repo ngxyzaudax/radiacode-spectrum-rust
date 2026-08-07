@@ -206,6 +206,41 @@ pub async fn handle_spectrum(
     }
 }
 
+pub async fn handle_dose_reset(
+    events: &Sender<WorkerEvent>,
+    device: Option<RadiaCode>,
+    session_endpoint: Option<&DeviceEndpoint>,
+    session: &SessionEpoch,
+    link_status: &mut DeviceStatus,
+    session_restore: &Option<SessionRestore>,
+) -> Option<RadiaCode> {
+    let Some(mut device) = device else {
+        warn!("dose reset skipped: no active device");
+        return None;
+    };
+    info!("resetting accumulated dose");
+    match device.dose_reset().await {
+        Ok(()) => {
+            if session.active() {
+                let _ = events.send(WorkerEvent::DoseResetComplete);
+            }
+            Some(device)
+        }
+        Err(error) => {
+            handle_device_error(
+                events,
+                device,
+                session_endpoint,
+                error,
+                session,
+                link_status,
+                session_restore,
+            )
+            .await
+        }
+    }
+}
+
 pub async fn handle_reset(
     events: &Sender<WorkerEvent>,
     device: Option<RadiaCode>,
@@ -414,16 +449,17 @@ pub async fn handle_monitor(
     };
     let refresh_rssi = false;
     match device.poll_monitor(&limits, refresh_rssi).await {
-        Ok((rates, fresh)) => {
+        Ok((sample, fresh)) => {
             merge_status(link_status, fresh);
             if !session.active() {
                 return Some(device);
             }
-            if let Some(rates) = rates {
+            let has_data = sample.rates.is_some() || sample.accumulated.is_some();
+            if has_data {
                 *monitor_polls = monitor_polls.saturating_add(1);
-                let _ = events.send(WorkerEvent::MonitorSample(rates));
+                let _ = events.send(WorkerEvent::MonitorSample(sample));
             } else {
-                debug!("monitor rates not yet available in databuf");
+                debug!("monitor data not yet available in databuf");
             }
             let _ = events.send(WorkerEvent::DeviceStatus(*link_status));
             let _ = events.send(WorkerEvent::MonitorPollComplete);

@@ -1,3 +1,4 @@
+mod dosimeter;
 mod app;
 mod app_config;
 mod energy;

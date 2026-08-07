@@ -3,7 +3,7 @@ use egui::{RichText, Ui, Vec2};
 use crate::settings::ui_icons::{paint_signal_icon, SignalIconKind};
 use crate::theme::MUTED;
 
-const CARD_WIDTH: f32 = 300.0;
+const CARD_WIDTH: f32 = 322.0;
 const LABEL_WIDTH: f32 = 56.0;
 const VALUE_WIDTH: f32 = 96.0;
 const UNIT_WIDTH: f32 = 52.0;

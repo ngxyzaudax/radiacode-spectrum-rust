@@ -4,6 +4,7 @@ use radiacode_core::{DeviceEndpoint, DiscoveredDevice};
 use tracing::{debug, info, warn};
 
 use crate::model::{ConnectionState, DeviceInfo, SpectrumView};
+use crate::dosimeter::DosimeterState;
 use crate::monitor::MonitorState;
 use crate::worker::{WorkerCommand, WorkerEvent};
 
@@ -15,6 +16,7 @@ pub struct AppState {
     pub spectrum: Option<SpectrumView>,
     pub spectrum_sequence: u64,
     pub monitor: MonitorState,
+    pub dosimeter: DosimeterState,
     pub scanning: bool,
     pub busy: bool,
     pub status: String,
@@ -35,6 +37,7 @@ impl AppState {
             spectrum: None,
             spectrum_sequence: 0,
             monitor: MonitorState::new(),
+            dosimeter: DosimeterState::new(),
             scanning: false,
             busy: false,
             status: "Looking for nearby detectors…".into(),
@@ -53,6 +56,7 @@ impl AppState {
         self.spectrum = None;
         self.spectrum_sequence = 0;
         self.monitor.on_disconnect();
+        self.dosimeter.on_disconnect();
         self.last_fetch = None;
         self.last_monitor_fetch = None;
         self.spectrum_fetch_pending = false;
@@ -96,6 +100,7 @@ impl AppState {
                 self.device_info = Some(info);
                 if fresh_session {
                     self.monitor.on_connect();
+                    self.dosimeter.on_connect();
                 }
                 self.spectrum_fetch_pending = false;
                 self.monitor_fetch_pending = false;
@@ -153,14 +158,25 @@ impl AppState {
                 None
             }
             WorkerEvent::DeviceStatus(_) => None,
-            WorkerEvent::MonitorSample(rates) if accept_session => {
-                self.monitor.push_sample(rates);
+            WorkerEvent::MonitorSample(sample) if accept_session => {
+                if let Some(rates) = sample.rates {
+                    self.monitor.push_sample(rates);
+                }
+                if let Some(accumulated) = sample.accumulated {
+                    self.dosimeter.push_sample(accumulated);
+                }
                 self.last_monitor_fetch = Some(Instant::now());
                 self.monitor_fetch_pending = false;
                 self.status = "Live monitor".into();
                 None
             }
             WorkerEvent::MonitorSample(_) => None,
+            WorkerEvent::DoseResetComplete if accept_session => {
+                self.dosimeter.on_reset();
+                self.status = "Dose reset.".into();
+                Some(WorkerCommand::FetchMonitor)
+            }
+            WorkerEvent::DoseResetComplete => None,
             WorkerEvent::MonitorPollComplete if accept_session => {
                 self.last_monitor_fetch = Some(Instant::now());
                 self.monitor_fetch_pending = false;
@@ -169,6 +185,7 @@ impl AppState {
             WorkerEvent::MonitorPollComplete => None,
             WorkerEvent::AlarmLimits(limits) if accept_session => {
                 self.monitor.apply_limits(limits);
+                self.dosimeter.apply_limits(limits);
                 None
             }
             WorkerEvent::AlarmLimits(_) => None,

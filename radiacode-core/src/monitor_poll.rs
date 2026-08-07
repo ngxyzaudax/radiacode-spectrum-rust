@@ -4,15 +4,17 @@ use crate::command::VirtString;
 use crate::data_buf::latest_snapshot;
 use crate::device::RadiaCode;
 use crate::error::Result;
-use crate::rate_units::{count_display_from_cps, dose_display_from_rh};
+use crate::rate_units::{
+    count_display_from_cps, dose_display_from_accum_r, dose_display_from_rh,
+};
 use crate::status_read::status_from_snapshot;
-use crate::types::{AlarmLimits, DeviceStatus, LiveRates};
+use crate::types::{AccumulatedDose, AlarmLimits, DeviceStatus, LiveRates, MonitorPollSample};
 
 pub async fn poll_monitor(
     device: &mut RadiaCode,
     units: &AlarmLimits,
     refresh_rssi: bool,
-) -> Result<(Option<LiveRates>, DeviceStatus)> {
+) -> Result<(MonitorPollSample, DeviceStatus)> {
     let response = device.read_virt_string(VirtString::DataBuf).await?;
     let snapshot = latest_snapshot(response.data());
     let status = status_from_snapshot(device, &snapshot, refresh_rssi).await?;
@@ -22,8 +24,17 @@ pub async fn poll_monitor(
         dose_unit_sv: units.dose_unit_sv,
         count_unit_cpm: units.count_unit_cpm,
     });
-    debug!(?rates, ?status, "monitor poll");
-    Ok((rates, status))
+    let accumulated = snapshot.rare.map(|rare| AccumulatedDose {
+        dose: dose_display_from_accum_r(rare.dose_r, units.dose_unit_sv),
+        duration_secs: rare.duration_secs,
+        dose_unit_sv: units.dose_unit_sv,
+    });
+    let sample = MonitorPollSample {
+        rates,
+        accumulated,
+    };
+    debug!(?sample, ?status, "monitor poll");
+    Ok((sample, status))
 }
 
 impl RadiaCode {
@@ -31,7 +42,7 @@ impl RadiaCode {
         &mut self,
         units: &AlarmLimits,
         refresh_rssi: bool,
-    ) -> Result<(Option<LiveRates>, DeviceStatus)> {
+    ) -> Result<(MonitorPollSample, DeviceStatus)> {
         poll_monitor(self, units, refresh_rssi).await
     }
 }
