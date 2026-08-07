@@ -8,10 +8,13 @@ This project is developed and tested on Linux. USB permissions, Bluetooth pairin
 
 **Radiacode Spectrum** (`radiacode-spectrum`) is the main application:
 
-- **Monitor** — live dose rate, count rate, accumulated dose, temperature, battery, and alarm state
+- **Monitor** — live dose rate, count rate, temperature, battery, and alarm state
 - **Spectrum** — energy spectrum histogram with calibration overlays
 - **Spectrogram** — time–energy waterfall capture, recording, and library playback
-- **Settings** — device configuration (alarms, units, display, sound/vibration/LED signals, clock sync) and app preferences (poll intervals, auto-connect, PC alarm repeat)
+- **Dosimeter** — accumulated dose and session duration, cumulative dose chart, alarm lines, and dose reset
+- **Settings** — device configuration (alarms, units, display, sound/vibration/light masters, clock sync) and app preferences (poll intervals, auto-connect, PC alarm repeat)
+
+Alarm cards expose sound and vibration per Warn / Danger / OOS; light indication for alarms is firmware-driven. The Signals panel master **Light** toggle follows the official Android control: `LEDS_ON` when the firmware exposes it, otherwise `DEVICE_CTRL` bit 3 (RC-110).
 
 Shared libraries handle device discovery, protocol framing, and transport:
 
@@ -73,13 +76,19 @@ Wireless connection uses BLE through BlueZ. Pair the detector in your system Blu
 
 ## Examples
 
-Low-level transport probes (USB device required):
+Low-level transport probes (USB device required; close the Spectrum app first so USB is free):
 
 ```bash
 cargo run -p radiacode-usb --example scan
 cargo run -p radiacode-usb --example connect -- <serial-or-usb-id>
 cargo run -p radiacode-usb --example probe_settings
+cargo run -p radiacode-usb --example dump_configuration
+cargo run -p radiacode-usb --example dump_sfr_file
+cargo run -p radiacode-usb --example snapshot_signals -- save before
+cargo run -p radiacode-usb --example snapshot_signals -- diff before after
 ```
+
+`snapshot_signals` is a read-only before/after helper for signal and display VirtSFRs (no calibration registers).
 
 ## Logging
 
